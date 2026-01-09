@@ -134,7 +134,7 @@ modules/
 ├── 05_scheduling/      # CPU & Performance
 ├── 06_memory/          # Memória & Mapeamento
 ├── 07_security/        # Segurança & Privilégios
-└──08_hardware/        # Hardware & Sensores
+└── 08_hardware/        # Hardware & Sensores
 ```
 
 ---

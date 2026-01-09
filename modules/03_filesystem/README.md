@@ -14,4 +14,3 @@ Tudo que toca disco.
 - Renomeações
 - Mudança de permissões
 - Acesso a paths específicos
-

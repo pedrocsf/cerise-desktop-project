@@ -6,7 +6,7 @@ Arquitetura baseada em camadas de comportamento do sistema operacional.
 
 ---
 
-## 📁 Arquitetura de Módulos
+## Arquitetura de Módulos
 
 ### 1 [Processos & Execução (Lifecycle)](modules/01_lifecycle/)
 

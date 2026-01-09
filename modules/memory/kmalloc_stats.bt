@@ -1,0 +1,36 @@
+#!/usr/bin/bpftrace
+
+/*
+ * kmalloc_stats.bt - Gera estatísticas sobre as alocações kmalloc.
+ * Agrega dados e exibe um resumo a cada 5 segundos.
+ * Útil para entender os padrões de alocação de memória do kernel.
+ */
+
+kprobe:kmalloc
+{
+  @start[tid] = (nsecs, arg0);
+}
+
+kretprobe:kmalloc
+/ @start[tid] /
+{
+  ($start_ns, $size) = @start[tid];
+  $latency_us = (nsecs - $start_ns) / 1000;
+
+  @allocs = count();
+  @bytes = sum($size);
+  @sizes_hist = hist($size);
+  @latency_hist_us = hist($latency_us);
+
+  delete(@start[tid]);
+}
+
+interval:s:5
+{
+  printf("--- kmalloc stats (last 5s) ---\n");
+  print(@allocs, @bytes);
+  print(@sizes_hist);
+  print(@latency_hist_us);
+  clear(@allocs); clear(@bytes); clear(@sizes_hist); clear(@latency_hist_us);
+  printf("---------------------------------\n\n");
+}

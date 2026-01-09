@@ -1,0 +1,31 @@
+#!/usr/bin/bpftrace
+
+/*
+ * sys_connect.bt - Rastreia chamadas de sistema connect() e seu resultado.
+ * Mostra detalhes da conexão (IP e porta) e o valor de retorno.
+ * Útil para depurar problemas de conectividade de rede em aplicações.
+ */
+tracepoint:syscalls:sys_enter_connect
+{
+  // Armazena o file descriptor e o ponteiro para a estrutura sockaddr.
+  @connect_info[tid] = (args->fd, args->uservaddr);
+}
+
+tracepoint:syscalls:sys_exit_connect
+/ @connect_info[tid] /
+{
+  ($fd, $uservaddr) = @connect_info[tid];
+  $sa = (struct sockaddr *)$uservaddr;
+
+  if ($sa->sa_family == AF_INET) {
+    $sin = (struct sockaddr_in *)$sa;
+    printf("CONNECT IPv4 pid=%d comm=%s fd=%d addr=%s:%d ret=%d\n",
+           pid, comm, $fd, ntop($sin->sin_addr), bswap($sin->sin_port), args->ret);
+  } else if ($sa->sa_family == AF_INET6) {
+    $sin6 = (struct sockaddr_in6 *)$sa;
+    printf("CONNECT IPv6 pid=%d comm=%s fd=%d addr=%s:%d ret=%d\n",
+           pid, comm, $fd, ntop($sin6->sin6_addr), bswap($sin6->sin6_port), args->ret);
+  }
+
+  delete(@connect_info[tid]);
+}

@@ -1,0 +1,13 @@
+tracepoint:sock:inet_sock_set_state
+/ args->newstate == 1 && args->family == 2 /
+{
+  printf(
+    "TCP ESTABLISHED pid=%d comm=%s %s:%d -> %s:%d\n",
+    pid,
+    comm,
+    ntop(args->saddr),
+    args->sport,
+    ntop(args->daddr),
+    args->dport
+  );
+}

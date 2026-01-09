@@ -1,0 +1,25 @@
+#!/usr/bin/bpftrace
+
+/*
+ * kmalloc_latency.bt - Rastreia chamadas kmalloc e mede sua latência.
+ * Mostra o tamanho da alocação, o ponteiro retornado e o tempo gasto.
+ * Útil para depurar o desempenho do alocador de memória do kernel.
+ */
+
+kprobe:kmalloc
+{
+  // Armazena o timestamp de início e o tamanho solicitado para esta thread.
+  @start[tid] = (nsecs, arg0);
+}
+
+kretprobe:kmalloc
+/ @start[tid] / // Executa apenas se houver uma entrada correspondente.
+{
+  ($start_ns, $size) = @start[tid];
+  $latency_us = (nsecs - $start_ns) / 1000;
+
+  printf("KMALLOC pid=%d comm=%s size=%llu ptr=%p latency=%d us\n",
+         pid, comm, $size, retval, $latency_us);
+
+  delete(@start[tid]);
+}

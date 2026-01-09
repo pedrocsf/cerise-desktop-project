@@ -1,0 +1,14 @@
+#!/usr/bin/bpftrace
+
+/*
+ * tcp_retransmit.bt - Conta retransmissões de TCP.
+ * Útil para diagnosticar problemas de rede.
+ */
+kprobe:tcp_retransmit_skb
+{
+  @retransmits = count();
+}
+
+interval:s:1 {
+  print(@retransmits);
+}

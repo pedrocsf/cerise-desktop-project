@@ -1,0 +1,27 @@
+#!/usr/bin/bpftrace
+
+/*
+ * block_io_latency.bt - Mede a latência de requisições de I/O de bloco.
+ * Rastreia desde a emissão (issue) até a conclusão (complete).
+ * Útil para identificar gargalos de I/O em discos.
+ */
+
+tracepoint:block:block_rq_issue
+{
+  // Armazena o timestamp de início, usando o dispositivo e o setor como chave.
+  // args->rwbs contém flags de Read/Write/Barrier/Sync.
+  @start[args->dev, args->sector] = (nsecs, args->nr_sector * 512, args->rwbs);
+}
+
+tracepoint:block:block_rq_complete
+/ @start[args->dev, args->sector] /
+{
+  ($start_ns, $bytes, $rwbs) = @start[args->dev, args->sector];
+  $latency_us = (nsecs - $start_ns) / 1000;
+  $op = ($rwbs & 1) ? 'W' : 'R'; // Decodifica a operação (Write/Read)
+
+  printf("BLOCK_IO dev=%d,%d op=%c sector=%llu bytes=%u latency=%d us comm=%s\n",
+         (args->dev >> 20), (args->dev & 0xfffff), $op, args->sector, $bytes, $latency_us, comm);
+
+  delete(@start[args->dev, args->sector]);
+}

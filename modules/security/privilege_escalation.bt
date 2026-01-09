@@ -1,0 +1,87 @@
+#!/usr/bin/env bpftrace
+/*
+ * privilege_escalation.bt - Detect privilege escalation attempts
+ * 
+ * Monitors syscalls commonly used for privilege escalation:
+ * - setuid/setgid changes
+ * - capabilities manipulation
+ * - sudo/su execution
+ * 
+ * Usage: bpftrace privilege_escalation.bt
+ */
+
+BEGIN
+{
+    printf("Monitoring privilege escalation attempts... Press Ctrl-C to end.\n");
+    printf("%-10s %-16s %-8s %-8s %-10s %s\n", 
+           "TIME", "COMM", "PID", "UID", "OPERATION", "DETAILS");
+}
+
+// setuid - change user ID
+tracepoint:syscalls:sys_enter_setuid
+{
+    time("%H:%M:%S  ");
+    printf("%-16s %-8d %-8d %-10s uid: %d -> %d\n",
+           comm,
+           pid,
+           uid,
+           "setuid",
+           uid,
+           args->uid);
+}
+
+// setgid - change group ID
+tracepoint:syscalls:sys_enter_setgid
+{
+    time("%H:%M:%S  ");
+    printf("%-16s %-8d %-8d %-10s gid: %d -> %d\n",
+           comm,
+           pid,
+           uid,
+           "setgid",
+           gid,
+           args->gid);
+}
+
+// setreuid - set real and effective user ID
+tracepoint:syscalls:sys_enter_setreuid
+{
+    time("%H:%M:%S  ");
+    printf("%-16s %-8d %-8d %-10s ruid=%d, euid=%d\n",
+           comm,
+           pid,
+           uid,
+           "setreuid",
+           args->ruid,
+           args->euid);
+}
+
+// setresuid - set real, effective and saved user ID
+tracepoint:syscalls:sys_enter_setresuid
+{
+    time("%H:%M:%S  ");
+    printf("%-16s %-8d %-8d %-10s ruid=%d, euid=%d, suid=%d\n",
+           comm,
+           pid,
+           uid,
+           "setresuid",
+           args->ruid,
+           args->euid,
+           args->suid);
+}
+
+// capset - set process capabilities
+tracepoint:syscalls:sys_enter_capset
+{
+    time("%H:%M:%S  ");
+    printf("%-16s %-8d %-8d %-10s capabilities modified\n",
+           comm,
+           pid,
+           uid,
+           "capset");
+}
+
+END
+{
+    printf("\nMonitoring ended.\n");
+}

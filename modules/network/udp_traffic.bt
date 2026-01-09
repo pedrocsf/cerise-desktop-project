@@ -1,0 +1,18 @@
+#!/usr/bin/bpftrace
+
+
+kprobe:udp_send_skb
+{
+  $skb = (struct sk_buff *)arg0;
+  $sport = $skb->sk->__sk_common.skc_num;
+  $dport = $skb->sk->__sk_common.skc_dport;
+  $daddr = ntop($skb->sk->__sk_common.skc_daddr);
+
+  printf("UDP SEND comm=%s sport=%d dport=%d daddr=%s\n", comm, $sport, bswap($dport), $daddr);
+}
+
+tracepoint:net:netif_receive_skb
+/ ((struct ip_hdr *)(((struct sk_buff *)args->skbaddr)->head + ((struct sk_buff *)args->skbaddr)->network_header))->protocol == 17 /
+{
+  printf("UDP RECV dev=%s\n", str(args->name));
+}

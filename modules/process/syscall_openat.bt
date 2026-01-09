@@ -1,0 +1,21 @@
+#!/usr/bin/bpftrace
+
+/*
+ * syscall_openat.bt - Rastreia chamadas de sistema openat().
+ * Mostra o nome do arquivo sendo aberto e o resultado (file descriptor ou erro).
+ * Útil para monitorar quais arquivos um processo está tentando acessar.
+ */
+
+tracepoint:syscalls:sys_enter_openat
+{
+  // Armazena o nome do arquivo em um mapa, usando o ID da thread como chave.
+  @filename[tid] = str(args->filename);
+}
+
+tracepoint:syscalls:sys_exit_openat
+/ @filename[tid] /
+{
+  printf("OPENAT pid=%d comm=%s filename=\"%s\" ret=%d\n",
+         pid, comm, @filename[tid], args->ret);
+  delete(@filename[tid]);
+}

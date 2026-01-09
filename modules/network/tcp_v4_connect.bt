@@ -1,0 +1,4 @@
+kprobe:tcp_v4_connect
+{
+  printf("TCP CONNECT pid=%d comm=%s\n", pid, comm);
+}

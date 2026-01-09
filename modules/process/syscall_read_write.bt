@@ -1,0 +1,36 @@
+#!/usr/bin/bpftrace
+
+/*
+ * syscall_read_write.bt - Rastreia chamadas de sistema read() e write().
+ * Mostra a quantidade de bytes lidos/escritos por um processo.
+ * Útil para monitorar a atividade de I/O de arquivos de uma aplicação.
+ */
+
+// Armazena o file descriptor na entrada da chamada.
+tracepoint:syscalls:sys_enter_read,
+tracepoint:syscalls:sys_enter_write
+{
+  @fds[tid] = args->fd;
+}
+
+// Na saída do read, imprime o resultado se for bem-sucedido.
+tracepoint:syscalls:sys_exit_read
+/ @fds[tid] /
+{
+  // args->ret contém o número de bytes lidos ou um código de erro (< 0).
+  if (args->ret > 0) {
+    printf("READ  pid=%d comm=%s fd=%d bytes=%d\n", pid, comm, @fds[tid], args->ret);
+  }
+  delete(@fds[tid]);
+}
+
+// Na saída do write, imprime o resultado se for bem-sucedido.
+tracepoint:syscalls:sys_exit_write
+/ @fds[tid] /
+{
+  // args->ret contém o número de bytes escritos ou um código de erro (< 0).
+  if (args->ret > 0) {
+    printf("WRITE pid=%d comm=%s fd=%d bytes=%d\n", pid, comm, @fds[tid], args->ret);
+  }
+  delete(@fds[tid]);
+}

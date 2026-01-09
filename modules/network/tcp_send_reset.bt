@@ -1,0 +1,4 @@
+tracepoint:tcp:tcp_send_reset
+{
+  printf("TCP RST pid=%d comm=%s\n", pid, comm);
+}

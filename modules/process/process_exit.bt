@@ -1,0 +1,10 @@
+#!/usr/bin/bpftrace
+
+/*
+ * process_exit.bt - Rastreia a saída de processos.
+ * Útil para monitorar quais processos estão terminando.
+ */
+tracepoint:sched:sched_process_exit
+{
+  printf("EXIT pid=%d comm=%s\n", pid, comm);
+}

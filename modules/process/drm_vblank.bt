@@ -1,0 +1,12 @@
+#!/usr/bin/bpftrace
+
+/*
+ * drm_vblank.bt - Conta eventos vblank do DRM (Direct Rendering Manager).
+ * NOTA: Isso não é uma métrica de "uso da GPU", mas sim da atividade de
+ * atualização da tela. A contagem por segundo deve aproximar a taxa de
+ * atualização do monitor.
+ */
+tracepoint:drm:drm_vblank_event
+{
+	@vblanks[args->crtc] = count();
+}

@@ -1,0 +1,12 @@
+#!/usr/bin/bpftrace
+
+/*
+ * thermal_trip.bt - Rastreia eventos de "trip point" térmico.
+ * NOTA: Este script só produzirá saída quando uma zona térmica (ex: CPU)
+ * atingir um limite de temperatura que dispara uma ação (ex: throttling).
+ * A disponibilidade do tracepoint pode variar entre kernels.
+ */
+tracepoint:thermal:thermal_zone_trip
+{
+  printf("Thermal trip: zone %s, trip %d, temp %d C\n", str(args->tz_name), args->trip_id, args->temp / 1000);
+}

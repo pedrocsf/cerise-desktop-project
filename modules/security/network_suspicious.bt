@@ -1,0 +1,75 @@
+#!/usr/bin/env bpftrace
+/*
+ * network_suspicious.bt - Detect suspicious network activity
+ * 
+ * Monitors network operations that may indicate malicious activity:
+ * - Connections to unusual ports
+ * - Reverse shells (outbound connections from shells)
+ * - Port scanning behavior
+ * 
+ * Usage: bpftrace network_suspicious.bt
+ */
+
+BEGIN
+{
+    printf("Monitoring suspicious network activity... Press Ctrl-C to end.\n");
+    printf("%-10s %-16s %-8s %-8s %-6s %-20s %s\n", 
+           "TIME", "COMM", "PID", "UID", "PORT", "IP", "FLAGS");
+    
+    // Common suspicious ports
+    @suspicious_ports[4444] = 1;  // Metasploit default
+    @suspicious_ports[31337] = 1; // Elite/leet
+    @suspicious_ports[12345] = 1; // NetBus
+    @suspicious_ports[54321] = 1; // Back Orifice
+}
+
+tracepoint:syscalls:sys_enter_connect
+{
+    $sa = (struct sockaddr *)args->uservaddr;
+    
+    if ($sa->sa_family == 2) // AF_INET
+    {
+        $s = (struct sockaddr_in *)args->uservaddr;
+        $port = ($s->sin_port >> 8) | (($s->sin_port << 8) & 0xff00);
+        $addr = ntop(2, &$s->sin_addr.s_addr);
+        
+        $suspicious = 0;
+        $flags = "";
+        
+        // Check for suspicious ports
+        if (@suspicious_ports[$port]) {
+            $suspicious = 1;
+            $flags = "[SUSPICIOUS_PORT]";
+        }
+        
+        // Check for shell processes making connections
+        if (comm == "sh" || comm == "bash" || comm == "dash" || 
+            comm == "zsh" || comm == "nc" || comm == "ncat") {
+            $suspicious = 1;
+            $flags = str($flags, " [SHELL_CONNECT]");
+        }
+        
+        // Check for connections to localhost from unexpected processes
+        if ($addr == "127.0.0.1" && $port > 10000) {
+            $suspicious = 1;
+            $flags = str($flags, " [HIGH_PORT_LOCALHOST]");
+        }
+        
+        if ($suspicious) {
+            time("%H:%M:%S  ");
+            printf("%-16s %-8d %-8d %-6d %-20s %s\n",
+                   comm,
+                   pid,
+                   uid,
+                   $port,
+                   $addr,
+                   $flags);
+        }
+    }
+}
+
+END
+{
+    clear(@suspicious_ports);
+    printf("\nMonitoring ended.\n");
+}

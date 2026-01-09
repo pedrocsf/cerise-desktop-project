@@ -15,15 +15,3 @@ Tudo que toca disco.
 - Mudança de permissões
 - Acesso a paths específicos
 
-## Eventos
-
-- openat, rename, unlink
-- chmod, chown
-- Escrita em arquivos sensíveis
-
-## Probes úteis
-
-- `vfs_open`
-- `vfs_write`
-- `vfs_unlink`
-- `tracepoint:syscalls:sys_enter_openat`

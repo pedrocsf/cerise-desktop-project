@@ -22,15 +22,3 @@ Observabilidade de tráfego no nível de processo.
 - Quantidade de bytes enviados/recebidos
 - Processo ↔ IP ↔ Porta
 
-## Eventos
-
-- tcp_connect
-- tcp_accept
-- udp_sendmsg
-- udp_recvmsg
-
-## Probes
-
-- `tracepoint:syscalls:sys_enter_connect`
-- `kprobe:tcp_v4_connect`
-- `kprobe:udp_sendmsg`

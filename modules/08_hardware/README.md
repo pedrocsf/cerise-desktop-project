@@ -14,14 +14,4 @@ Interação direta com o hardware.
 - Temperatura
 - GPU / CPU freq
 
-## Exemplos
 
-- hwmon
-- thermal
-- i2c
-- ioctl em dispositivos
-
-## Probes
-
-- `tracepoint:syscalls:sys_enter_ioctl`
-- `kprobe:dev_ioctl`

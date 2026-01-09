@@ -14,14 +14,4 @@ Quando e por quanto tempo algo roda.
 - Latência de execução
 - Bloqueios
 
-## Eventos
 
-- `sched:sched_switch`
-- `sched:sched_wakeup`
-- `sched:sched_stat_runtime`
-
-## Muito usado para
-
-- Performance
-- Detecção de loops
-- Análise de starvation

@@ -16,16 +16,3 @@ Base de quase todo monitoramento com bpftrace.
 - UID/GID no momento da execução
 - Linha de comando completa
 
-## Eventos típicos
-
-- `sched:sched_process_fork`
-- `sched:sched_process_exec`
-- `sched:sched_process_exit`
-- `sys_enter_execve`
-
-## Útil para
-
-- Auditoria
-- Segurança
-- Profiling
-- Detecção de anomalias

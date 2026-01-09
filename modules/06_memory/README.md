@@ -14,14 +14,4 @@ Fundamental para detectar técnicas avançadas.
 - Proteções suspeitas
 - Page faults
 
-## Syscalls
 
-- mmap
-- mprotect
-- brk
-- munmap
-
-## Indicadores interessantes
-
-- PROT_EXEC | PROT_WRITE
-- Execução sem binário no disco

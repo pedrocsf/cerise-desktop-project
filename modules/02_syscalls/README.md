@@ -14,15 +14,3 @@ Onde o "comportamento real" aparece.
 - Frequência e padrões
 - Argumentos sensíveis
 
-## Exemplos comuns
-
-- **Arquivos**: openat, read, write, unlink
-- **Privilégios**: setuid, setgid
-- **Memória**: mmap, mprotect
-- **Debug**: ptrace
-- **Tempo**: nanosleep
-
-## Probes
-
-- `tracepoint:syscalls:sys_enter_*`
-- `tracepoint:syscalls:sys_exit_*`

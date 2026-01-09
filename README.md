@@ -109,7 +109,7 @@ _Monitora: sensores, /dev/_, temperatura, GPU/CPU freq, ioctl\*
 
 
 
-##  Uso Rápido
+##  Uso
 
 ```bash
 # Executar um script

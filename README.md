@@ -1,59 +1,141 @@
-# cerise-desktop-project
+# Cerise Desktop Project
 
-Coleção de scripts bpftrace para monitoramento e observabilidade do sistema Linux.
+Coleção abrangente de scripts **bpftrace** para monitoramento, observabilidade e segurança do sistema Linux.
 
-##  Módulos
+Arquitetura baseada em camadas de comportamento do sistema operacional.
 
-###  Network
+---
 
-**tcp_established**: conexão TCP bem sucedida  
-**tcp_v4_connect**: tentativas de conexões TCP  
-**tcp_destroy**: conexão TCP encerrada  
-**tcp_send_reset** e **tcp_receive_reset**: resets de TCP (fim anormal de conexão)  
-**tcp_retransmit_skb**: retransmissão de pacotes TCP (novo envio de pacote)  
-**tcp_retransmit**: rastreamento de retransmissões TCP  
-**tcp_bad_csum**: erros de checksum (pacote TCP chega corrompido)  
-**tcp_cong_state_set**: mudança de estado de controle de congestionamento TCP  
-**udp_traffic**: monitoramento de tráfego UDP (envio e recebimento)
+## 📁 Arquitetura de Módulos
 
-###  Memory 
+### 1 [Processos & Execução (Lifecycle)](modules/01_lifecycle/)
 
-**io_latency**: latência de I/O do disco (histograma de tempo de resposta)  
-**io_size**: tamanho das operações de I/O no disco  
-**kmalloc_latency**: latência de alocações de memória do kernel (kmalloc)  
-**kmalloc_stats**: estatísticas de alocações kmalloc do kernel
+Base de quase todo monitoramento com bpftrace.
 
-###  Process 
+- **process_exec.bt** - execução de novos processos
+- **process_exit.bt** - término de processos
 
-**block_io_latency**: latência de I/O de bloco por processo  
-**cpu_usage**: uso de CPU por processo (amostragem)  
-**drm_vblank**: eventos de vblank da GPU (sincronização vertical)  
-**process_exec**: rastreamento de execução de novos processos (execve)  
-**process_exit**: rastreamento de saída/término de processos  
-**runq_latency**: latência da fila de execução do scheduler  
-**sys_enter_connect**: tentativa de usar o syscall connect()  
-**syscall_openat**: rastreamento de abertura de arquivos (openat)  
-**syscall_read_write**: rastreamento de leituras e escritas (read/write)  
-**thermal_trip**: eventos de temperatura térmica do sistema
+_Monitora: fork, clone, execve, exit, relação pai→filho, UID/GID, linha de comando_
 
-###  Security 
+---
 
-**sensitive_file_access**: monitora acesso a arquivos sensíveis (/etc/passwd, /etc/shadow, chaves SSH)  
-**suspicious_exec**: detecta execuções suspeitas (binários em /tmp, exec sem TTY)  
-**dangerous_syscalls**: monitora syscalls perigosas (ptrace, mount, setns, bpf)  
-**privilege_escalation**: detecta tentativas de escalação de privilégios (setuid, setgid, capabilities)  
-**network_suspicious**: detecta atividade de rede suspeita (portas conhecidas, reverse shells)
+### 2 [Syscalls (Comportamento de Usuário)](modules/02_syscalls/)
 
-##
+Onde o "comportamento real" aparece.
 
-Todos os scripts podem ser executados com:
+- **syscall_openat.bt** - abertura de arquivos
+- **syscall_read_write.bt** - leituras e escritas
+- **sys_enter_connect.bt** - tentativas de conexão
+
+_Monitora: chamadas de sistema, frequência, padrões, argumentos sensíveis_
+
+---
+
+### 3 [Sistema de Arquivos & I/O](modules/03_filesystem/)
+
+Tudo que toca disco.
+
+- **io_latency.bt** - latência de I/O do disco
+- **io_size.bt** - tamanho das operações de I/O
+- **block_io_latency.bt** - latência de I/O por processo
+
+_Monitora: criação, leitura, escrita, deleção, renomeações, permissões_
+
+---
+
+### 4 [Rede (Networking)](modules/04_network/)
+
+Observabilidade de tráfego no nível de processo.
+
+- **tcp_established.bt** - conexões TCP bem sucedidas
+- **tcp_v4_connect.bt** - tentativas de conexão
+- **tcp_destroy.bt** - conexões encerradas
+- **tcp_send_reset.bt** / **tcp_receive_reset.bt** - resets TCP
+- **tcp_retransmit.bt** / **tcp_retransmit_skb.bt** - retransmissões
+- **tcp_bad_csum.bt** - erros de checksum
+- **tcp_cong_state_set.bt** - controle de congestionamento
+- **udp_traffic.bt** - tráfego UDP
+
+_Monitora: sockets, TCP/UDP, DNS, bytes enviados/recebidos, Processo↔IP↔Porta_
+
+---
+
+### 5 [Escalonamento, CPU & Performance](modules/05_scheduling/)
+
+Quando e por quanto tempo algo roda.
+
+- **cpu_usage.bt** - uso de CPU por processo
+- **runq_latency.bt** - latência da fila de execução
+
+_Monitora: tempo de CPU, context switches, latência, bloqueios, starvation_
+
+---
+
+### 6 [Memória & Mapeamento](modules/06_memory/)
+
+Fundamental para detectar técnicas avançadas.
+
+- **kmalloc_latency.bt** - latência de alocações do kernel
+- **kmalloc_stats.bt** - estatísticas de alocações
+
+_Monitora: alocações, regiões executáveis, proteções suspeitas, page faults_
+
+---
+
+### 7 [Privilégios, Credenciais & Segurança](modules/07_security/)
+
+Tudo que muda identidade ou comportamento suspeito.
+
+- **sensitive_file_access.bt** - acesso a arquivos sensíveis
+- **suspicious_exec.bt** - execuções suspeitas
+- **dangerous_syscalls.bt** - syscalls perigosas (ptrace, mount, setns, bpf)
+- **privilege_escalation.bt** - escalação de privilégios
+- **network_suspicious.bt** - atividade de rede suspeita
+
+_Monitora: UID/GID, capabilities, sudo/su, setuid, arquivos sensíveis_
+
+---
+
+### 8 [Dispositivos, Sensores & Hardware](modules/08_hardware/)
+
+Interação direta com o hardware.
+
+- **drm_vblank.bt** - eventos de vblank da GPU
+- **thermal_trip.bt** - eventos de temperatura
+
+_Monitora: sensores, /dev/_, temperatura, GPU/CPU freq, ioctl\*
+
+---
+
+
+
+##  Uso Rápido
 
 ```bash
-sudo bpftrace modules/<categoria>/<script>.bt
+# Executar um script
+sudo bpftrace modules/04_network/tcp_established.bt
+
+# Com output para arquivo
+sudo bpftrace modules/07_security/suspicious_exec.bt > suspicious.log
+
+# Background
+sudo bpftrace modules/01_lifecycle/process_exec.bt &
 ```
 
-Exemplo:
 
-```bash
-sudo bpftrace modules/network/tcp_established.bt
+## Estrutura do Projeto
+
 ```
+modules/
+├── 01_lifecycle/       # Processos & Execução
+├── 02_syscalls/        # Syscalls & Comportamento
+├── 03_filesystem/      # Sistema de Arquivos & I/O
+├── 04_network/         # Rede & Conectividade
+├── 05_scheduling/      # CPU & Performance
+├── 06_memory/          # Memória & Mapeamento
+├── 07_security/        # Segurança & Privilégios
+└──08_hardware/        # Hardware & Sensores
+```
+
+---
+

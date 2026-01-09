@@ -1,0 +1,7 @@
+#!/usr/bin/bpftrace
+
+
+tracepoint:sched:sched_process_exec
+{
+  printf("EXEC pid=%d comm=%s filename=%s\n", pid, comm, str(args->filename));
+}

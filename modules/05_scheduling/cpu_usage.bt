@@ -1,0 +1,7 @@
+#!/usr/bin/bpftrace
+
+
+profile:hz:99
+{
+  @cpu[cpu, comm] = count();
+}

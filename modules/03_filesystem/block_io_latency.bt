@@ -1,10 +1,6 @@
 #!/usr/bin/bpftrace
 
-/*
- * block_io_latency.bt - Mede a latência de requisições de I/O de bloco.
- * Rastreia desde a emissão (issue) até a conclusão (complete).
- * Útil para identificar gargalos de I/O em discos.
- */
+
 
 tracepoint:block:block_rq_issue
 {

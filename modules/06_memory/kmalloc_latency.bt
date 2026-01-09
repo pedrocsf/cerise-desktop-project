@@ -1,10 +1,6 @@
 #!/usr/bin/bpftrace
 
-/*
- * kmalloc_latency.bt - Rastreia chamadas kmalloc e mede sua latência.
- * Mostra o tamanho da alocação, o ponteiro retornado e o tempo gasto.
- * Útil para depurar o desempenho do alocador de memória do kernel.
- */
+
 
 kprobe:kmalloc
 {

@@ -1,14 +1,5 @@
 #!/usr/bin/env bpftrace
-/*
- * suspicious_exec.bt - Detect suspicious process execution patterns
- * 
- * Monitors for potentially malicious execution behaviors:
- * - Binaries executed from /tmp or /dev/shm (common attack vectors)
- * - Execution without TTY (possible backdoor/automated attacks)
- * - Execution by unexpected users (privilege escalation)
- * 
- * Usage: bpftrace suspicious_exec.bt
- */
+
 
 BEGIN
 {

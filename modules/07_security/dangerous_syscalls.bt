@@ -1,16 +1,5 @@
 #!/usr/bin/env bpftrace
-/*
- * dangerous_syscalls.bt - Monitor dangerous system calls
- * 
- * Tracks potentially dangerous syscalls that could indicate:
- * - Container escapes (setns, unshare)
- * - Process injection (ptrace)
- * - Filesystem manipulation (mount, umount)
- * - Kernel manipulation (bpf, kexec_load)
- * 
- * These syscalls are legitimate but rare in normal operation.
- * Monitoring them helps detect privilege escalation and container breakouts.
- */
+
 
 BEGIN
 {

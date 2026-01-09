@@ -1,10 +1,6 @@
 #!/usr/bin/bpftrace
 
-/*
- * kmalloc_stats.bt - Gera estatísticas sobre as alocações kmalloc.
- * Agrega dados e exibe um resumo a cada 5 segundos.
- * Útil para entender os padrões de alocação de memória do kernel.
- */
+
 
 kprobe:kmalloc
 {

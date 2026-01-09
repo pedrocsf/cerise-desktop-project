@@ -1,0 +1,12 @@
+#!/usr/bin/bpftrace
+
+
+tracepoint:block:block_rq_issue
+{
+  @bytes[comm] = sum(args->bytes);
+}
+
+interval:s:5
+{
+  print(@bytes);
+}

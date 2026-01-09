@@ -1,14 +1,5 @@
 #!/usr/bin/env bpftrace
-/*
- * network_suspicious.bt - Detect suspicious network activity
- * 
- * Monitors network operations that may indicate malicious activity:
- * - Connections to unusual ports
- * - Reverse shells (outbound connections from shells)
- * - Port scanning behavior
- * 
- * Usage: bpftrace network_suspicious.bt
- */
+
 
 BEGIN
 {

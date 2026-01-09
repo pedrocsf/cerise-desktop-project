@@ -1,16 +1,5 @@
 #!/usr/bin/env bpftrace
-/*
- * sensitive_file_access.bt - Monitor access to sensitive files
- * 
- * Detects when processes attempt to open sensitive system files that could
- * indicate malicious activity or privilege escalation attempts.
- * 
- * Monitored files:
- * - /etc/passwd, /etc/shadow (credential files)
- * - /proc/*/mem (process memory access)
- * - /etc/sudoers (sudo configuration)
- * - SSH keys and authorized_keys
- */
+
 
 BEGIN
 {

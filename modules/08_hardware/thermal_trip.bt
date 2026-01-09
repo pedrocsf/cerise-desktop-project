@@ -1,0 +1,7 @@
+#!/usr/bin/bpftrace
+
+
+tracepoint:thermal:thermal_zone_trip
+{
+  printf("Thermal trip: zone %s, trip %d, temp %d C\n", str(args->tz_name), args->trip_id, args->temp / 1000);
+}

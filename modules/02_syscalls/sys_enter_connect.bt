@@ -1,10 +1,6 @@
 #!/usr/bin/bpftrace
 
-/*
- * sys_connect.bt - Rastreia chamadas de sistema connect() e seu resultado.
- * Mostra detalhes da conexão (IP e porta) e o valor de retorno.
- * Útil para depurar problemas de conectividade de rede em aplicações.
- */
+
 tracepoint:syscalls:sys_enter_connect
 {
   // Armazena o file descriptor e o ponteiro para a estrutura sockaddr.

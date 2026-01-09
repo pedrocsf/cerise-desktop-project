@@ -1,9 +1,6 @@
 #!/usr/bin/bpftrace
 
-/*
- * runq_latency.bt - Mede a latência da fila de execução (run queue).
- * Mostra o tempo que uma tarefa espera antes de ser executada na CPU.
- */
+
 tracepoint:sched:sched_wakeup_new,
 tracepoint:sched:sched_wakeup
 {

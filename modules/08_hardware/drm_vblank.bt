@@ -1,0 +1,7 @@
+#!/usr/bin/bpftrace
+
+
+tracepoint:drm:drm_vblank_event
+{
+	@vblanks[args->crtc] = count();
+}

@@ -1,14 +1,5 @@
 #!/usr/bin/env bpftrace
-/*
- * privilege_escalation.bt - Detect privilege escalation attempts
- * 
- * Monitors syscalls commonly used for privilege escalation:
- * - setuid/setgid changes
- * - capabilities manipulation
- * - sudo/su execution
- * 
- * Usage: bpftrace privilege_escalation.bt
- */
+
 
 BEGIN
 {

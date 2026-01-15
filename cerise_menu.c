@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <time.h>
+#include <fcntl.h>
 #include <dirent.h>
 
 #define MAX_PATH 512
@@ -39,7 +40,6 @@ typedef struct
 } BackgroundProcess;
 
 BackgroundProcess bg_processes[MAX_SCRIPTS];
-int bg_count = 0;
 
 // Categorias do projeto
 const char *categories[] = {
@@ -106,11 +106,14 @@ int main()
         {
             printf("\nEncerrando Cerise Menu...\n");
             // Matar processos em background
-            for (int i = 0; i < bg_count; i++)
+            for (int i = 0; i < MAX_SCRIPTS; i++)
             {
                 if (bg_processes[i].active)
                 {
-                    kill(bg_processes[i].pid, SIGTERM);
+                    char cmd[64];
+                    snprintf(cmd, sizeof(cmd), "sudo kill %d", bg_processes[i].pid);
+                    system(cmd);
+                    waitpid(bg_processes[i].pid, NULL, 0);
                 }
             }
             break;
@@ -344,6 +347,23 @@ void execute_script_foreground(const char *script_path)
 
 void execute_script_background(const char *script_path, const char *script_name)
 {
+    int slot = -1;
+    for (int i = 0; i < MAX_SCRIPTS; i++)
+    {
+        if (!bg_processes[i].active)
+        {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot == -1)
+    {
+        printf("\nLimite de processos em background atingido!\n");
+        pause_screen();
+        return;
+    }
+
     char log_file[MAX_PATH];
     char *timestamp = get_timestamp();
 
@@ -355,19 +375,27 @@ void execute_script_background(const char *script_path, const char *script_name)
     if (pid == 0)
     {
         // Processo filho
+        setsid(); // Cria nova sessão para isolar do terminal do menu
+
+        // Redireciona stdin para /dev/null para evitar conflito de TTY
+        int dev_null = open("/dev/null", O_RDWR);
+        if (dev_null > 0) {
+            dup2(dev_null, STDIN_FILENO);
+            close(dev_null);
+        }
+
         char command[MAX_PATH * 2];
-        snprintf(command, sizeof(command), "sudo bpftrace %s > %s 2>&1", script_path, log_file);
+        snprintf(command, sizeof(command), "exec sudo bpftrace %s > %s 2>&1", script_path, log_file);
         execl("/bin/sh", "sh", "-c", command, NULL);
         exit(1);
     }
     else if (pid > 0)
     {
         // Processo pai
-        bg_processes[bg_count].pid = pid;
-        strncpy(bg_processes[bg_count].script_name, script_name, MAX_SCRIPT_NAME - 1);
-        strncpy(bg_processes[bg_count].log_file, log_file, MAX_PATH - 1);
-        bg_processes[bg_count].active = 1;
-        bg_count++;
+        bg_processes[slot].pid = pid;
+        strncpy(bg_processes[slot].script_name, script_name, MAX_SCRIPT_NAME - 1);
+        strncpy(bg_processes[slot].log_file, log_file, MAX_PATH - 1);
+        bg_processes[slot].active = 1;
 
         printf("\nScript iniciado em background!\n");
         printf("   PID: %d\n", pid);
@@ -390,7 +418,7 @@ void show_background_processes()
     char response;
 
     // Verificar quais processos ainda estão ativos
-    for (int i = 0; i < bg_count; i++)
+    for (int i = 0; i < MAX_SCRIPTS; i++)
     {
         if (bg_processes[i].active)
         {
@@ -404,7 +432,7 @@ void show_background_processes()
     }
 
     // Listar processos ativos
-    for (int i = 0; i < bg_count; i++)
+    for (int i = 0; i < MAX_SCRIPTS; i++)
     {
         if (bg_processes[i].active)
         {
@@ -458,9 +486,12 @@ void kill_background_process()
     if (choice == 0)
         return;
 
-    if (choice >= 1 && choice <= bg_count && bg_processes[choice - 1].active)
+    if (choice >= 1 && choice <= MAX_SCRIPTS && bg_processes[choice - 1].active)
     {
-        kill(bg_processes[choice - 1].pid, SIGTERM);
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "sudo kill %d", bg_processes[choice - 1].pid);
+        system(cmd);
+        waitpid(bg_processes[choice - 1].pid, NULL, 0);
         bg_processes[choice - 1].active = 0;
         printf("\nProcesso %d terminado.\n", bg_processes[choice - 1].pid);
     }

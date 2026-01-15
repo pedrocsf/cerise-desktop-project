@@ -159,7 +159,6 @@ void show_header()
     clear_screen();
     printf("╔════════════════════════════════════════════════════════════╗\n");
     printf("║           CERISE DESKTOP PROJECT                           ║\n");
-    printf("║              BPFtrace Monitoring & Security                ║\n");
     printf("╚════════════════════════════════════════════════════════════╝\n\n");
 }
 
@@ -333,7 +332,7 @@ void execute_script_foreground(const char *script_path)
     printf("Pressione Ctrl+C para interromper\n\n");
     sleep(2);
 
-    char command[MAX_PATH + 20];
+    char command[MAX_PATH + 64];
     snprintf(command, sizeof(command), "sudo bpftrace %s", script_path);
 
     if (system(command) != 0)
@@ -379,13 +378,14 @@ void execute_script_background(const char *script_path, const char *script_name)
 
         // Redireciona stdin para /dev/null para evitar conflito de TTY
         int dev_null = open("/dev/null", O_RDWR);
-        if (dev_null > 0) {
+        if (dev_null > 0)
+        {
             dup2(dev_null, STDIN_FILENO);
             close(dev_null);
         }
 
-        char command[MAX_PATH * 2];
-        snprintf(command, sizeof(command), "exec sudo bpftrace %s > %s 2>&1", script_path, log_file);
+        char command[MAX_PATH * 3];
+        snprintf(command, sizeof(command), "exec sudo bpftrace -f json %s > %s 2>&1", script_path, log_file);
         execl("/bin/sh", "sh", "-c", command, NULL);
         exit(1);
     }

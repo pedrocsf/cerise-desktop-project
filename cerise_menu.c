@@ -555,11 +555,41 @@ void view_log()
 
     if (choice >= 1 && choice <= log_count)
     {
-        char command[MAX_PATH + 10];
-        snprintf(command, sizeof(command), "less %s", log_files[choice - 1]);
-        if (system(command) != 0)
+        int action;
+        printf("\nOpções para '%s':\n", log_files[choice - 1]);
+        printf("  1. Visualizar log (less)\n");
+        printf("  2. Analisar anomalias com IA (TinyLlama)\n");
+        printf("  0. Cancelar\n");
+        printf("\nEscolha: ");
+
+        if (scanf("%d", &action) != 1)
         {
-            printf("\nErro ao abrir log\n");
+            while (getchar() != '\n')
+                ;
+            return;
+        }
+        while (getchar() != '\n')
+            ;
+
+        if (action == 1)
+        {
+            char command[MAX_PATH + 10];
+            snprintf(command, sizeof(command), "less %s", log_files[choice - 1]);
+            system(command);
+        }
+        else if (action == 2)
+        {
+            if (access("llama.py", F_OK) != -1)
+            {
+                char command[MAX_PATH + 64];
+                // Chama o script python passando o arquivo de log
+                snprintf(command, sizeof(command), "python3 llama.py %s", log_files[choice - 1]);
+                system(command);
+            }
+            else
+            {
+                printf("\n[ERRO] O script 'llama.py' nao foi encontrado no diretorio atual.\n");
+            }
             pause_screen();
         }
     }

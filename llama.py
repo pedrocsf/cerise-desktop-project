@@ -9,7 +9,6 @@ def analyze_log(filepath):
         print(f"Error: File '{filepath}' not found.")
         return
 
-    # Read the last 50 lines to fit within the TinyLlama context
     try:
         with open(filepath, 'r') as f:
             lines = f.readlines()
@@ -38,7 +37,7 @@ def analyze_log(filepath):
 
     url = "http://localhost:11434/api/generate"
     data = {
-        "model": "tinyllama",
+        "model": "llama2",
         "prompt": prompt,
         "stream": False
     }
@@ -49,7 +48,7 @@ def analyze_log(filepath):
         
         with urllib.request.urlopen(req) as response:
             result = json.loads(response.read().decode('utf-8'))
-            print("═════════ ANALYSIS (TinyLlama) ═════════")
+            print("═════════ ANALYSIS ═════════")
             print(result.get("response", "No response from the model.").strip())
             
     except urllib.error.URLError:

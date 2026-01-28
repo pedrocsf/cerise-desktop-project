@@ -558,7 +558,7 @@ void view_log()
         int action;
         printf("\nOpções para '%s':\n", log_files[choice - 1]);
         printf("  1. Visualizar log (less)\n");
-        printf("  2. Analisar anomalias com IA (TinyLlama)\n");
+        printf("  2. Analisar com Llama)\n");
         printf("  0. Cancelar\n");
         printf("\nEscolha: ");
 

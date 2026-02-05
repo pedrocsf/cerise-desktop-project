@@ -1,12 +1,18 @@
 import os
 import time
-import json
 from llama import send_for_analysis
+import chromadb
+from chromadb.utils import embedding_functions
 
 LOG_DIR = "logs"
 POLL_INTERVAL = 2      
-BATCH_SIZE = 30       
-HEADER_SKIP_LINES = 5  
+HEADER_SKIP_LINES = 0  
+
+# --- RAG Configuration ---
+DB_DIR = "vector_db"
+COLLECTION_NAME = "security_docs"
+MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
+CONTEXT_RESULTS = 1
 
 
 CRITICAL_SCRIPTS = [
@@ -19,50 +25,85 @@ CRITICAL_SCRIPTS = [
     "fileless_execution",
     "docker_socket_access",
     "log_tampering",
+    "test"
 ]
 
+BATCH_SIZE = 50
+
 PROMPT_TEMPLATE = """### Instruction:
-FOR EACH ANOMALY DETECTED, PROVIDE A SEVERETY NUMBER FROM 1 (LOW) TO 5 (CRITICAL).
-Analyze the following batch of Linux security logs for anomalies, patterns, or coordinated malicious activity.
-Focus on identifying sequences of events that might indicate an attack, such as privilege escalation followed by file modification.
-Output ONLY a concise analysis result in plain text.
-Do NOT output any "INFO", "DEBUG", or timestamped logs describing your thought process.
-Do NOT simulate a system log.
-If everything looks normal, say "No anomalies detected".
+Act as a cybersecurity analyst. Review the logs below for malicious activity based on the provided context.
+If you detect a threat (e.g. unauthorized access, suspicious execution, log tampering), mark it as THREAT.
+Otherwise, mark it as SAFE.
 
+Format that you need to follow:
+VERDICT: <SAFE/THREAT>
+SEVERITY: <1-5>
+ANALYSIS: <Short explanation>
 
-### Input:
+### Context:
+{rag_context}
+
+### Input Logs:
 {log_batch}
 
 ### Response:
 """
 
+class RagRetriever:
+    """Handles the connection and querying of the vector database."""
+    def __init__(self):
+        self.collection = None
+        try:
+            print("Initializing RAG retriever...")
+            client = chromadb.PersistentClient(path=DB_DIR)
+            embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+                model_name=MODEL_NAME,
+                trust_remote_code=True
+            )
+            self.collection = client.get_collection(
+                name=COLLECTION_NAME,
+                embedding_function=embedding_function
+            )
+            print("RAG retriever initialized successfully.")
+        except Exception as e:
+            print(f"Error initializing RAG retriever: {e}\nAnalysis will proceed without RAG context.")
+
+    def retrieve_context(self, query_text, n_results=CONTEXT_RESULTS):
+        if not self.collection:
+            return "RAG context is unavailable due to an initialization error."
+        
+        results = self.collection.query(query_texts=[query_text], n_results=n_results)
+        context_docs = results.get('documents', [[]])[0]
+        if not context_docs:
+            return "No relevant context found in the knowledge base."
+        return "\n\n---\n\n".join(context_docs)
+
 def is_critical(log_filename):
-    """Verifica se o nome do arquivo de log corresponde a um script crítico."""
+    """Checks if the log filename corresponds to a critical script."""
     for script_name in CRITICAL_SCRIPTS:
         if script_name in log_filename:
             return True
     return False
 
 def clear_screen():
-    """Limpa a tela do terminal."""
+    """Clears the terminal screen."""
     os.system('clear' if os.name == 'posix' else 'cls')
 
 def show_header():
-    """Mostra o cabeçalho do programa."""
+    """Displays the program header."""
     clear_screen()
     print("╔════════════════════════════════════════════════════════════╗")
-    print("║           CERISE LOG WATCHER - ANÁLISE CONTÍNUA            ║")
+    print("║            CERISE LOG WATCHER - CONTINUOUS ANALYSIS            ║")
     print("╚════════════════════════════════════════════════════════════╝\n")
 
 def main():
     show_header()
-    print("Iniciando o Cerise Log Watcher para análise contínua com IA...")
-    print(f"Monitorando o diretório: '{LOG_DIR}'")
-    print(f"Scripts críticos: {', '.join(CRITICAL_SCRIPTS)}")
-    #print(f"Enviando logs para análise em lotes de {BATCH_SIZE} eventos (após pular {HEADER_SKIP_LINES} linhas iniciais).")
-    print("Pressione Ctrl+C para parar.")
+    print("Starting Cerise Log Watcher for continuous AI analysis...")
+    print(f"Monitoring directory: '{LOG_DIR}'")
+    print(f"Critical scripts: {', '.join(CRITICAL_SCRIPTS)}")
+    print("Press Ctrl+C to stop.")
 
+    rag_retriever = RagRetriever()
     file_states = {}
 
     try:
@@ -96,30 +137,41 @@ def main():
                         batch_to_send = state['pending_lines'][:BATCH_SIZE]
                         state['pending_lines'] = state['pending_lines'][BATCH_SIZE:]
 
+                        print(f"\n--- Batch of {len(batch_to_send)} critical events from '{filename}' ready for analysis ---")
+                        
                         log_batch_content = "".join(batch_to_send)
-                        full_prompt = PROMPT_TEMPLATE.format(log_batch=log_batch_content)
 
-                        print(f"\n--- Lote de {len(batch_to_send)} eventos críticos de '{filename}' pronto para análise ---")
-                        print("Analisando com IA...")
+                        # 1. Retrieve relevant context from the vector DB
+                        rag_context = rag_retriever.retrieve_context(log_batch_content)
+                        
+                        # --- DEBUG: Print the retrieved context ---
+                        print("═════════ RETRIEVED RAG CONTEXT ═════════")
+                        print(rag_context)
+                        print("═════════════════════════════════════════")
+
+                        # 2. Augment the prompt with the retrieved context
+                        full_prompt = PROMPT_TEMPLATE.format(rag_context=rag_context, log_batch=log_batch_content)
+
+                        print("Analyzing with AI...")
                         analysis = send_for_analysis(full_prompt)
                         if analysis:
-                            print("═════════ ANÁLISE DA IA ═════════")
+                            print("═══════════ AI ANALYSIS ═══════════")
                             print(analysis)
-                            print("═════════════════════════════════")
+                            print("═══════════════════════════════════")
 
                 except FileNotFoundError:
                     if filepath in file_states:
                         del file_states[filepath]
                     continue
                 except Exception as e:
-                    print(f"Erro ao processar o arquivo {filepath}: {e}")
+                    print(f"Error processing file {filepath}: {e}")
 
             time.sleep(POLL_INTERVAL)
     except KeyboardInterrupt:
-        print("\nParando o Cerise Log Watcher.")
+        print("\nStopping Cerise Log Watcher.")
 
 if __name__ == "__main__":
     if not os.path.exists(LOG_DIR):
-        print(f"Erro: Diretório de logs '{LOG_DIR}' não encontrado. Execute um script em background primeiro.")
+        print(f"Error: Log directory '{LOG_DIR}' not found. Run a background script first.")
     else:
         main()

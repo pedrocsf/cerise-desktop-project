@@ -5,15 +5,18 @@ import urllib.error
 import os
 
 def send_for_analysis(prompt):
-    """Envia um prompt completo para o Ollama e retorna a resposta."""
+    """Sends a complete prompt to Ollama and returns the response."""
     if not prompt:
         return
 
     url = "http://localhost:11434/api/generate"
     data = {
-        "model": "tinyllama",
+        "model": "llama2",
         "prompt": prompt,
-        "stream": False
+        "stream": False,
+        "options": {
+            "temperature": 0.0
+        }
     }
 
     try:
@@ -26,11 +29,11 @@ def send_for_analysis(prompt):
 
     except urllib.error.URLError as e:
         error_message = "\n[ERROR] Could not connect to Ollama (http://localhost:11434).\n" \
-                        "Make sure Ollama is running and the 'tinyllama' model is installed.\n" \
-                        "Dica: Execute 'ollama run tinyllama' no terminal antes."
+                        f"Make sure Ollama is running and the '{data['model']}' model is installed.\n" \
+                        f"Tip: Run 'ollama run {data['model']}' in your terminal beforehand."
         return error_message
     except Exception as e:
-        return f"[ERROR] An unexpected error occurred during analysis: {e}"
+        return f"[ERROR] An unexpected error occurred during analysis: {str(e)}"
 
 def analyze_log_file(filepath):
     if not os.path.exists(filepath):
@@ -42,7 +45,7 @@ def analyze_log_file(filepath):
             lines = f.readlines()
             content = "".join(lines[-50:])
     except Exception as e:
-        print(f"Erro ao ler arquivo: {e}")
+        print(f"Error reading file: {e}")
         return
 
     prompt = f"""### Instruction:

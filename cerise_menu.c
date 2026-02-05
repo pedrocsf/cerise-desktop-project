@@ -43,14 +43,14 @@ const char *categories[] = {
     "08_hardware"};
 
 const char *category_names[] = {
-    "Processos & Execução (Lifecycle)",
-    "Syscalls (Comportamento de Usuário)",
-    "Sistema de Arquivos & I/O",
-    "Rede (Networking)",
-    "Escalonamento, CPU & Performance",
-    "Memória & Mapeamento",
-    "Privilégios, Credenciais & Segurança",
-    "Dispositivos, Sensores & Hardware"};
+    "Processes & Execution (Lifecycle)",
+    "Syscalls (User Behavior)",
+    "Filesystem & I/O",
+    "Networking",
+    "Scheduling, CPU & Performance",
+    "Memory & Mapping",
+    "Privileges, Credentials & Security",
+    "Devices, Sensors & Hardware"};
 
 const int num_categories = 8;
 
@@ -78,13 +78,13 @@ int main()
     while (1)
     {
         show_main_menu();
-        printf("\nEscolha uma opção (0-12): ");
+        printf("\nChoose an option (0-12): ");
 
         if (scanf("%d", &choice) != 1)
         {
             while (getchar() != '\n')
                 ;
-            printf("\nEntrada inválida!\n");
+            printf("\nInvalid input!\n");
             pause_screen();
             continue;
         }
@@ -93,7 +93,7 @@ int main()
 
         if (choice == 0)
         {
-            printf("\nEncerrando Cerise Menu...\n");
+            printf("\nExiting Cerise Menu...\n");
             for (int i = 0; i < MAX_SCRIPTS; i++)
             {
                 if (bg_processes[i].active)
@@ -120,7 +120,7 @@ int main()
         }
         else
         {
-            printf("\nOpcao invalida!\n");
+            printf("\nInvalid option!\n");
             pause_screen();
         }
     }
@@ -138,7 +138,7 @@ void clear_screen()
 
 void pause_screen()
 {
-    printf("\nPressione ENTER para continuar...");
+    printf("\nPress ENTER to continue...");
     getchar();
 }
 
@@ -160,9 +160,9 @@ void show_main_menu()
     }
 
     printf("\n  ───────────────────────────────────────────────────────────\n");
-    printf("   9.  Ver processos em background\n");
-    printf("  10.  Visualizar logs\n");
-    printf("   0.  Sair\n");
+    printf("   9.  View background processes\n");
+    printf("  10.  View logs\n");
+    printf("   0.  Exit\n");
     printf("  ───────────────────────────────────────────────────────────\n");
 }
 
@@ -177,11 +177,11 @@ void show_category_menu(int category_idx)
     while (1)
     {
         show_header();
-        printf("Categoria: %s\n\n", category_names[category_idx]);
+        printf("Category: %s\n\n", category_names[category_idx]);
 
         if (script_count == 0)
         {
-            printf("Nenhum script encontrado nesta categoria.\n");
+            printf("No scripts found in this category.\n");
         }
         else
         {
@@ -192,17 +192,17 @@ void show_category_menu(int category_idx)
         }
 
         printf("\n  ───────────────────────────────────────────────────────────\n");
-        printf("  98. Ver ajuda desta categoria\n");
-        printf("  99. Voltar ao menu principal\n");
-        printf("   0. Sair\n");
+        printf("  98. View help for this category\n");
+        printf("  99. Back to main menu\n");
+        printf("   0. Exit\n");
         printf("  ───────────────────────────────────────────────────────────\n");
-        printf("\nEscolha um script (0-%d, 98-99): ", script_count);
+        printf("\nChoose a script (0-%d, 98-99): ", script_count);
 
         if (scanf("%d", &choice) != 1)
         {
             while (getchar() != '\n')
                 ;
-            printf("\nEntrada invalida!\n");
+            printf("\nInvalid input!\n");
             pause_screen();
             continue;
         }
@@ -224,17 +224,17 @@ void show_category_menu(int category_idx)
         else if (choice >= 1 && choice <= script_count)
         {
             int exec_choice;
-            printf("\nExecutar '%s':\n", scripts[choice - 1].name);
-            printf("  1. Execução direta (foreground)\n");
-            printf("  2. Execução em background (gera log)\n");
-            printf("  0. Cancelar\n");
-            printf("\nEscolha: ");
+            printf("\nExecute '%s':\n", scripts[choice - 1].name);
+            printf("  1. Direct execution (foreground)\n");
+            printf("  2. Background execution (generates log)\n");
+            printf("  0. Cancel\n");
+            printf("\nChoose: ");
 
             if (scanf("%d", &exec_choice) != 1)
             {
                 while (getchar() != '\n')
                     ;
-                printf("\nEntrada invalida!\n");
+                printf("\nInvalid input!\n");
                 pause_screen();
                 continue;
             }
@@ -252,7 +252,7 @@ void show_category_menu(int category_idx)
         }
         else
         {
-            printf("\nOpcao invalida!\n");
+            printf("\nInvalid option!\n");
             pause_screen();
         }
     }
@@ -265,13 +265,13 @@ void show_help(int category_idx)
 
     clear_screen();
     printf("╔════════════════════════════════════════════════════════════╗\n");
-    printf("║  AJUDA: %s\n", category_names[category_idx]);
+    printf("║  HELP: %s\n", category_names[category_idx]);
     printf("╚════════════════════════════════════════════════════════════╝\n\n");
 
     FILE *fp = fopen(readme_path, "r");
     if (fp == NULL)
     {
-        printf("Arquivo de ajuda nao encontrado: %s\n", readme_path);
+        printf("Help file not found: %s\n", readme_path);
     }
     else
     {
@@ -316,8 +316,8 @@ void list_scripts(int category_idx, Script scripts[], int *count)
 
 void execute_script_foreground(const char *script_path)
 {
-    printf("\nExecutando em foreground...\n");
-    printf("Pressione Ctrl+C para interromper\n\n");
+    printf("\nExecuting in foreground...\n");
+    printf("Press Ctrl+C to interrupt\n\n");
     sleep(2);
 
     char command[MAX_PATH + 64];
@@ -325,10 +325,10 @@ void execute_script_foreground(const char *script_path)
 
     if (system(command) != 0)
     {
-        printf("\nExecucao finalizada com codigo de saida diferente de 0\n");
+        printf("\nExecution finished with a non-zero exit code\n");
     }
 
-    printf("\nExecucao finalizada.\n");
+    printf("\nExecution finished.\n");
     pause_screen();
 }
 
@@ -346,7 +346,7 @@ void execute_script_background(const char *script_path, const char *script_name)
 
     if (slot == -1)
     {
-        printf("\nLimite de processos em background atingido!\n");
+        printf("\nBackground process limit reached!\n");
         pause_screen();
         return;
     }
@@ -382,14 +382,14 @@ void execute_script_background(const char *script_path, const char *script_name)
         strncpy(bg_processes[slot].log_file, log_file, MAX_PATH - 1);
         bg_processes[slot].active = 1;
 
-        printf("\nScript iniciado em background!\n");
+        printf("\nScript started in background!\n");
         printf("   PID: %d\n", pid);
         printf("   Log: %s\n", log_file);
         pause_screen();
     }
     else
     {
-        printf("\nErro ao criar processo!\n");
+        printf("\nError creating process!\n");
         pause_screen();
     }
 }
@@ -397,7 +397,7 @@ void execute_script_background(const char *script_path, const char *script_name)
 void show_background_processes()
 {
     show_header();
-    printf("PROCESSOS EM BACKGROUND\n\n");
+    printf("BACKGROUND PROCESSES\n\n");
 
     int active_count = 0;
     char response;
@@ -427,19 +427,19 @@ void show_background_processes()
 
     if (active_count == 0)
     {
-        printf("  Nenhum processo em background ativo.\n");
+        printf("  No active background processes.\n");
     }
     else
     {
         printf("\n  ───────────────────────────────────────────────────────────\n");
-        printf("  Deseja matar algum processo? (S/n): ");
+        printf("  Do you want to kill a process? (y/N): ");
 
         if (scanf(" %c", &response) == 1)
         {
             while (getchar() != '\n')
                 ;
 
-            if (response == 'S' || response == 's')
+            if (response == 'Y' || response == 'y')
             {
                 kill_background_process();
                 return;
@@ -453,13 +453,13 @@ void show_background_processes()
 void kill_background_process()
 {
     int choice;
-    printf("\n  Digite o número do processo para matar (0 para cancelar): ");
+    printf("\n  Enter the process number to kill (0 to cancel): ");
 
     if (scanf("%d", &choice) != 1)
     {
         while (getchar() != '\n')
             ;
-        printf("\nX Entrada inválida!\n");
+        printf("\nInvalid input!\n");
         pause_screen();
         return;
     }
@@ -476,11 +476,11 @@ void kill_background_process()
         system(cmd);
         waitpid(bg_processes[choice - 1].pid, NULL, 0);
         bg_processes[choice - 1].active = 0;
-        printf("\nProcesso %d terminado.\n", bg_processes[choice - 1].pid);
+        printf("\nProcess %d terminated.\n", bg_processes[choice - 1].pid);
     }
     else
     {
-        printf("\nProcesso invalido!\n");
+        printf("\nInvalid process!\n");
     }
 
     pause_screen();
@@ -489,12 +489,12 @@ void kill_background_process()
 void view_log()
 {
     show_header();
-    printf("VISUALIZAR LOGS\n\n");
+    printf("VIEW LOGS\n\n");
 
     DIR *dir = opendir(LOG_DIR);
     if (dir == NULL)
     {
-        printf("Diretorio de logs nao encontrado.\n");
+        printf("Log directory not found.\n");
         pause_screen();
         return;
     }
@@ -516,20 +516,20 @@ void view_log()
 
     if (log_count == 0)
     {
-        printf("  Nenhum log encontrado.\n");
+        printf("  No logs found.\n");
         pause_screen();
         return;
     }
 
-    printf("\n  0. Voltar\n");
-    printf("\n  Escolha um log para visualizar: ");
+    printf("\n  0. Back\n");
+    printf("\n  Choose a log to view: ");
 
     int choice;
     if (scanf("%d", &choice) != 1)
     {
         while (getchar() != '\n')
             ;
-        printf("\nEntrada invalida!\n");
+        printf("\nInvalid input!\n");
         pause_screen();
         return;
     }
@@ -539,11 +539,11 @@ void view_log()
     if (choice >= 1 && choice <= log_count)
     {
         int action;
-        printf("\nOpções para '%s':\n", log_files[choice - 1]);
-        printf("  1. Visualizar log (less)\n");
-        printf("  2. Analisar com Llama)\n");
-        printf("  0. Cancelar\n");
-        printf("\nEscolha: ");
+        printf("\nOptions for '%s':\n", log_files[choice - 1]);
+        printf("  1. View log (less)\n");
+        printf("  2. Analyze with Llama\n");
+        printf("  0. Cancel\n");
+        printf("\nChoose: ");
 
         if (scanf("%d", &action) != 1)
         {
@@ -570,7 +570,7 @@ void view_log()
             }
             else
             {
-                printf("\n[ERRO] O script 'llama.py' nao foi encontrado no diretorio atual.\n");
+                printf("\n[ERROR] Script 'llama.py' not found in the current directory.\n");
             }
             pause_screen();
         }

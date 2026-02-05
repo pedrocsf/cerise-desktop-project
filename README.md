@@ -91,6 +91,10 @@ Tudo que muda identidade ou comportamento suspeito.
 - **dangerous_syscalls.bt** - syscalls perigosas (ptrace, mount, setns, bpf)
 - **privilege_escalation.bt** - escalação de privilégios
 - **network_suspicious.bt** - atividade de rede suspeita
+- **kernel_module_load.bt** - carregamento de módulos do kernel (rootkits)
+- **fileless_execution.bt** - execução "sem arquivo" via memfd_create
+- **docker_socket_access.bt** - acesso ao socket do Docker (container escape)
+- **log_tampering.bt** - tentativa de alteração de logs
 
 _Monitora: UID/GID, capabilities, sudo/su, setuid, arquivos sensíveis_
 
@@ -107,9 +111,7 @@ _Monitora: sensores, /dev/_, temperatura, GPU/CPU freq, ioctl\*
 
 ---
 
-
-
-##  Uso
+## Uso
 
 ```bash
 # Executar um script
@@ -121,7 +123,6 @@ sudo bpftrace modules/07_security/suspicious_exec.bt > suspicious.log
 # Background
 sudo bpftrace modules/01_lifecycle/process_exec.bt &
 ```
-
 
 ## Estrutura do Projeto
 
@@ -138,4 +139,3 @@ modules/
 ```
 
 ---
-

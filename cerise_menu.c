@@ -1,10 +1,3 @@
-/*
- * Cerise Desktop Project - Interactive Menu
- *
- * Menu interativo para gerenciar scripts bpftrace
- * Permite execução direta, background, visualização de logs e ajuda
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +15,6 @@
 #define MAX_SCRIPTS 50
 #define LOG_DIR "logs"
 
-// Estrutura para representar um script
 typedef struct
 {
     char name[MAX_SCRIPT_NAME];
@@ -30,7 +22,6 @@ typedef struct
     char description[256];
 } Script;
 
-// Estrutura para processos em background
 typedef struct
 {
     pid_t pid;
@@ -41,7 +32,6 @@ typedef struct
 
 BackgroundProcess bg_processes[MAX_SCRIPTS];
 
-// Categorias do projeto
 const char *categories[] = {
     "01_lifecycle",
     "02_syscalls",
@@ -64,7 +54,6 @@ const char *category_names[] = {
 
 const int num_categories = 8;
 
-// Protótipos de funções
 void clear_screen();
 void pause_screen();
 void show_header();
@@ -94,18 +83,17 @@ int main()
         if (scanf("%d", &choice) != 1)
         {
             while (getchar() != '\n')
-                ; // Limpar buffer
+                ;
             printf("\nEntrada inválida!\n");
             pause_screen();
             continue;
         }
         while (getchar() != '\n')
-            ; // Limpar buffer
+            ;
 
         if (choice == 0)
         {
             printf("\nEncerrando Cerise Menu...\n");
-            // Matar processos em background
             for (int i = 0; i < MAX_SCRIPTS; i++)
             {
                 if (bg_processes[i].active)
@@ -373,10 +361,8 @@ void execute_script_background(const char *script_path, const char *script_name)
 
     if (pid == 0)
     {
-        // Processo filho
-        setsid(); // Cria nova sessão para isolar do terminal do menu
+        setsid();
 
-        // Redireciona stdin para /dev/null para evitar conflito de TTY
         int dev_null = open("/dev/null", O_RDWR);
         if (dev_null > 0)
         {
@@ -391,7 +377,6 @@ void execute_script_background(const char *script_path, const char *script_name)
     }
     else if (pid > 0)
     {
-        // Processo pai
         bg_processes[slot].pid = pid;
         strncpy(bg_processes[slot].script_name, script_name, MAX_SCRIPT_NAME - 1);
         strncpy(bg_processes[slot].log_file, log_file, MAX_PATH - 1);
@@ -417,7 +402,6 @@ void show_background_processes()
     int active_count = 0;
     char response;
 
-    // Verificar quais processos ainda estão ativos
     for (int i = 0; i < MAX_SCRIPTS; i++)
     {
         if (bg_processes[i].active)
@@ -431,7 +415,6 @@ void show_background_processes()
         }
     }
 
-    // Listar processos ativos
     for (int i = 0; i < MAX_SCRIPTS; i++)
     {
         if (bg_processes[i].active)
@@ -582,7 +565,6 @@ void view_log()
             if (access("llama.py", F_OK) != -1)
             {
                 char command[MAX_PATH + 64];
-                // Chama o script python passando o arquivo de log
                 snprintf(command, sizeof(command), "python3 llama.py %s", log_files[choice - 1]);
                 system(command);
             }

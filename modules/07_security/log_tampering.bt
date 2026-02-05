@@ -1,0 +1,20 @@
+/*
+ * log_tampering.bt - Rastreia tentativas de escrita em arquivos de log.
+ *
+ * Detecta processos que abrem arquivos de log comuns com permissão de escrita,
+ * o que pode indicar uma tentativa de apagar rastros.
+ *
+ * USAGE: sudo bpftrace log_tampering.bt
+ */
+
+// Definição de flags de escrita
+#define O_WRONLY 1
+#define O_RDWR   2
+
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ( (strstr($filename, "/var/log/") == $filename || strstr($filename, "/var/adm/") == $filename) && (args->flags & (O_WRONLY | O_RDWR)) ) {
+        printf("{\"event\": \"log_tampering_attempt\", \"comm\": \"%s\", \"pid\": %d, \"uid\": %d, \"file\": \"%s\"}\n", comm, pid, uid, $filename);
+    }
+}

@@ -4,7 +4,35 @@ import urllib.request
 import urllib.error
 import os
 
-def analyze_log(filepath):
+def send_for_analysis(prompt):
+    """Envia um prompt completo para o Ollama e retorna a resposta."""
+    if not prompt:
+        return
+
+    url = "http://localhost:11434/api/generate"
+    data = {
+        "model": "tinyllama",
+        "prompt": prompt,
+        "stream": False
+    }
+
+    try:
+        json_data = json.dumps(data).encode('utf-8')
+        req = urllib.request.Request(url, data=json_data, headers={'Content-Type': 'application/json'})
+
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            return result.get("response", "No response from the model.").strip()
+
+    except urllib.error.URLError as e:
+        error_message = "\n[ERROR] Could not connect to Ollama (http://localhost:11434).\n" \
+                        "Make sure Ollama is running and the 'tinyllama' model is installed.\n" \
+                        "Dica: Execute 'ollama run tinyllama' no terminal antes."
+        return error_message
+    except Exception as e:
+        return f"[ERROR] An unexpected error occurred during analysis: {e}"
+
+def analyze_log_file(filepath):
     if not os.path.exists(filepath):
         print(f"Error: File '{filepath}' not found.")
         return
@@ -15,10 +43,6 @@ def analyze_log(filepath):
             content = "".join(lines[-50:])
     except Exception as e:
         print(f"Erro ao ler arquivo: {e}")
-        return
-
-    if not content.strip():
-        print("O arquivo de log está vazio.")
         return
 
     prompt = f"""### Instruction:
@@ -34,30 +58,13 @@ def analyze_log(filepath):
     ### Response:
     """
 
-
-    url = "http://localhost:11434/api/generate"
-    data = {
-        "model": "llama2",
-        "prompt": prompt,
-        "stream": False
-    }
-    
-    try:
-        json_data = json.dumps(data).encode('utf-8')
-        req = urllib.request.Request(url, data=json_data, headers={'Content-Type': 'application/json'})
-        
-        with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            print("═════════ ANALYSIS ═════════")
-            print(result.get("response", "No response from the model.").strip())
-            
-    except urllib.error.URLError:
-        print("\n[ERROR] Could not connect to Ollama (http://localhost:11434).")
-        print("Make sure Ollama is running and the 'tinyllama' model is installed.")
-        print("Dica: Execute 'ollama run tinyllama' no terminal antes.")
+    analysis_result = send_for_analysis(prompt)
+    if analysis_result:
+        print("═════════ ANALYSIS ═════════")
+        print(analysis_result)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 LLAMA.py <log_file_path>")
+        print("Usage: python3 llama.py <log_file_path>")
     else:
-        analyze_log(sys.argv[1])
+        analyze_log_file(sys.argv[1])

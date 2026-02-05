@@ -141,15 +141,12 @@ def main():
                         
                         log_batch_content = "".join(batch_to_send)
 
-                        # 1. Retrieve relevant context from the vector DB
                         rag_context = rag_retriever.retrieve_context(log_batch_content)
                         
-                        # --- DEBUG: Print the retrieved context ---
                         print("═════════ RETRIEVED RAG CONTEXT ═════════")
                         print(rag_context)
                         print("═════════════════════════════════════════")
 
-                        # 2. Augment the prompt with the retrieved context
                         full_prompt = PROMPT_TEMPLATE.format(rag_context=rag_context, log_batch=log_batch_content)
 
                         print("Analyzing with AI...")

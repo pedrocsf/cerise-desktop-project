@@ -2,7 +2,6 @@ import chromadb
 import pprint
 import os
 
-# --- Configuration (should match indexer.py) ---
 DB_DIR = "vector_db"
 COLLECTION_NAME = "security_docs"
 
@@ -25,15 +24,12 @@ def read_vector_db():
 
     print(f"\nReading all entries from collection '{COLLECTION_NAME}'...\n")
     
-    # Get all items from the collection.
-    # The `include` parameter specifies which data fields to return.
     results = collection.get(include=["metadatas", "documents"])
 
     if not results or not results.get('ids'):
         print("The collection appears to be empty.")
         return
 
-    # Use pprint for a nicely formatted output of the dictionary
     pprint.pprint(results)
     print(f"\nTotal items found: {len(results['ids'])}")
 

@@ -18,7 +18,7 @@
 #include <dirent.h>
 
 #define SCRIPT_DIR "."
-#define LOG_DIR "../../logs" 
+#define LOG_DIR "../../logs"
 #define MAX_PATH 512
 #define MAX_SCRIPT_NAME 128
 #define MAX_SCRIPTS 20
@@ -30,7 +30,7 @@
  * -pidfile: Salva o PID para gerenciamento.
  * -display none: Desativa a saída gráfica.
  */
-#define QEMU_COMMAND "qemu-system-x86_64 -m 2048 -smp 2 -drive file=malware_vm.qcow2 -display none -pidfile " QEMU_PID_FILE " -daemonize"
+#define QEMU_COMMAND "qemu-system-x86_64 -m 8192 -smp 6 -drive file=malware_vm.qcow2 -display none -pidfile " QEMU_PID_FILE " -daemonize"
 
 typedef struct
 {
@@ -94,7 +94,7 @@ int main()
         if (scanf("%d", &choice) != 1)
         {
             while (getchar() != '\n')
-                ; 
+                ;
             printf("\nInvalid input!\n");
             pause_screen();
             continue;
@@ -191,9 +191,9 @@ void execute_script_background(const char *script_path, const char *script_name)
 
     pid_t pid = fork();
 
-    if (pid == 0) 
+    if (pid == 0)
     {
-        setsid(); 
+        setsid();
 
         int dev_null = open("/dev/null", O_RDWR);
         if (dev_null > 0)
@@ -208,7 +208,7 @@ void execute_script_background(const char *script_path, const char *script_name)
         perror("execl failed");
         exit(1);
     }
-    else if (pid > 0) 
+    else if (pid > 0)
     {
         bg_processes[process_count].pid = pid;
         strncpy(bg_processes[process_count].script_name, script_name, MAX_SCRIPT_NAME - 1);
@@ -232,13 +232,13 @@ void show_status()
     if (qemu_pid > 0)
     {
         if (kill(qemu_pid, 0) == 0)
-        { 
+        {
             printf("  [ACTIVE] QEMU VM (PID: %d)\n", qemu_pid);
         }
         else
         {
             printf("  [STOPPED] QEMU VM (last PID: %d) is no longer running.\n", qemu_pid);
-            qemu_pid = 0; 
+            qemu_pid = 0;
         }
     }
     else
@@ -254,11 +254,11 @@ void show_status()
             int status;
             pid_t result = waitpid(bg_processes[i].pid, &status, WNOHANG);
             if (result == bg_processes[i].pid)
-            { 
+            {
                 bg_processes[i].active = 0;
             }
             else if (result == 0)
-            { 
+            {
                 printf("  [ACTIVE] PID %-6d | Script: %s\n", bg_processes[i].pid, bg_processes[i].script_name);
                 printf("           Log: %s\n", bg_processes[i].log_file);
                 active_count++;
@@ -283,7 +283,7 @@ void stop_all_scripts()
             char cmd[64];
             snprintf(cmd, sizeof(cmd), "sudo kill %d", bg_processes[i].pid);
             system(cmd);
-            waitpid(bg_processes[i].pid, NULL, 0); 
+            waitpid(bg_processes[i].pid, NULL, 0);
             bg_processes[i].active = 0;
         }
     }
@@ -326,7 +326,7 @@ void start_qemu_vm()
             printf("Could not read PID from pidfile.\n");
         }
         fclose(f);
-        remove(QEMU_PID_FILE); 
+        remove(QEMU_PID_FILE);
     }
     else
     {

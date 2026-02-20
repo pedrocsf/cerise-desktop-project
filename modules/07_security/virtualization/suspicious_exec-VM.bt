@@ -1,0 +1,17 @@
+/*
+ * Detecta a execução de processos a partir de locais incomuns (/tmp, /dev/shm)
+ * pelo processo da QEMU.
+ */
+
+tracepoint:syscalls:sys_enter_execve
+/
+  comm == "qemu-system-x86_64" &&
+  ( str(args->filename, 5) == "/tmp/" ||
+    str(args->filename, 9) == "/dev/shm/" ||
+    str(args->filename, 9) == "/var/tmp/" )
+/
+{
+	time("%H:%M:%S ");
+	printf("ALERTA: Processo QEMU (PID: %d) executou a partir de local suspeito: %s %s\n",
+	       pid, str(args->filename), str(args->argv[1]));
+}

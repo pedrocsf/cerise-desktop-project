@@ -1,0 +1,15 @@
+/*
+ * Monitora o acesso ao socket do Docker pelo processo da QEMU.
+ */
+
+tracepoint:syscalls:sys_enter_connect
+/ comm == "qemu-system-x86_64" /
+{
+	$sockaddr = (struct sockaddr_un *)args->uaddr;
+	if ($sockaddr->sun_family == AF_UNIX) {
+		if (str($sockaddr->sun_path, 24) == "/var/run/docker.sock") {
+			time("%H:%M:%S ");
+			printf("ALERTA: Processo QEMU (PID: %d) tentou acessar o Docker socket!\n", pid);
+		}
+	}
+}

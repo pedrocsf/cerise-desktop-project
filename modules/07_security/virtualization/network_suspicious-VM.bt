@@ -1,0 +1,17 @@
+/*
+ * Monitora atividades de rede suspeitas pelo processo da QEMU,
+ * como conexões em portas não padrão.
+ */
+
+kprobe:tcp_v4_connect
+/ comm == "qemu-system-x86_64" /
+{
+	$sk = (struct sock *)arg0;
+	$dport = $sk->__sk_common.skc_dport;
+	// Filtra portas comuns para reduzir ruído. Adicione outras se necessário.
+	if (ntohs($dport) != 80 && ntohs($dport) != 443) {
+		time("%H:%M:%S ");
+		printf("ALERTA: Processo QEMU (PID: %d) iniciou conexão para %s:%d\n",
+		       pid, ntop(AF_INET, $sk->__sk_common.skc_daddr), ntohs($dport));
+	}
+}

@@ -1,0 +1,24 @@
+/*
+ * Monitora tentativas de acesso a arquivos sensíveis pelo processo da QEMU.
+ * Um alerta aqui pode indicar um escape de contêiner ou VM.
+ */
+
+BEGIN
+{
+	printf("Rastreando acesso a arquivos sensíveis pelo processo 'qemu-system-x86_64'...\n");
+	// Lista de arquivos sensíveis. Adicione outros se necessário.
+	@sensitive_files[str("/etc/shadow")] = 1;
+	@sensitive_files[str("/etc/gshadow")] = 1;
+	@sensitive_files[str("/etc/passwd")] = 1;
+	@sensitive_files[str("/root/.ssh/authorized_keys")] = 1;
+}
+
+tracepoint:syscalls:sys_enter_openat
+/
+  comm == "qemu-system-x86_64" &&
+  @sensitive_files[str(args->filename)]
+/
+{
+	time("%H:%M:%S ");
+	printf("ALERTA: Processo QEMU (PID: %d) tentou acessar arquivo sensível: %s\n", pid, str(args->filename));
+}

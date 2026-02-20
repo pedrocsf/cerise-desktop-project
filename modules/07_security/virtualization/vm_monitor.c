@@ -1,10 +1,4 @@
-/**
- * Compilação:
- *   gcc -o vm_monitor vm_monitor.c
- *
- * Uso:
- *   sudo ./vm_monitor
- */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,12 +18,7 @@
 #define MAX_SCRIPTS 20
 #define QEMU_PID_FILE "qemu.pid"
 
-/**
- * Comando para iniciar a VM. Altere aqui conforme necessário.
- * -daemonize: Roda em background.
- * -pidfile: Salva o PID para gerenciamento.
- * -display none: Desativa a saída gráfica.
- */
+
 #define QEMU_COMMAND "qemu-system-x86_64 -m 8192 -smp 6 -drive file=malware_vm.qcow2 -display none -pidfile " QEMU_PID_FILE " -daemonize"
 
 typedef struct

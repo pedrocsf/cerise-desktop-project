@@ -12,15 +12,16 @@
 #define QEMU_COMMAND "qemu-system-x86_64 "                                                     \
                      "-m 8192 "                                                                \
                      "-smp 6 "                                                                 \
-                     "-machine q35 "                                                           \
-                     "-drive file=/home/pacto/malware_vm.qcow2,format=qcow2 "                  \
-                     "-net nic "                                                               \
-                     "-net user "                                                              \
-                     "-chardev socket,id=logsocket,path=/tmp/vm_logs.sock,server=on,wait=off " \
+                     "-machine q35,accel=kvm "                                                 \
+                     "-cpu host "                                                              \
+                     "-drive file=/home/pacto/malware_vm.qcow2,format=qcow2,cache=writeback "  \
+                     "-netdev user,id=net0,hostfwd=tcp::2222-:22 "                             \
+                     "-device e1000,netdev=net0 "                                              \
                      "-device virtio-serial-pci "                                              \
-                     "-device virtserialport,chardev=logsocket,name=vm_logs "                  \
+                     "-chardev pty,id=privesc_channel "                                        \
+                     "-device virtserialport,chardev=privesc_channel,name=com.cerise.privesc " \
                      "-pidfile " QEMU_PID_FILE " "                                             \
-                     /* "-daemonize"*/
+                     "-enable-kvm"
 
 pid_t qemu_pid = 0;
 

@@ -1,0 +1,47 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define BPFTRACE_COMMAND "sudo /usr/bin/bpftrace /usr/bin/Downloads/privilege_escalation.bt"
+
+#define SERIAL_DEVICE_PATH "/dev/vport0p1"
+
+int main()
+{
+    FILE *bpftrace_pipe;
+    FILE *serial_port;
+    char buffer[4096];
+
+    printf("Starting monitor and redirecting to %s...\n", SERIAL_DEVICE_PATH);
+
+    serial_port = fopen(SERIAL_DEVICE_PATH, "w");
+    if (serial_port == NULL)
+    {
+        perror("Error opening serial device");
+        fprintf(stderr, "Check if device '%s' exists and if you have permission.\n", SERIAL_DEVICE_PATH);
+        fprintf(stderr, "Was the VM started with the correct virtio-serial chardev?\n");
+        return EXIT_FAILURE;
+    }
+
+    bpftrace_pipe = popen(BPFTRACE_COMMAND, "r");
+    if (bpftrace_pipe == NULL)
+    {
+        perror("Error executing bpftrace command with popen");
+        fclose(serial_port);
+        return EXIT_FAILURE;
+    }
+
+    printf("Monitoring active. Output is being sent to the host.\n");
+
+    while (fgets(buffer, sizeof(buffer), bpftrace_pipe) != NULL)
+    {
+        fputs(buffer, serial_port);
+        fflush(serial_port);
+    }
+
+    printf("Shutting down monitor...\n");
+    pclose(bpftrace_pipe);
+    fclose(serial_port);
+
+    return EXIT_SUCCESS;
+}

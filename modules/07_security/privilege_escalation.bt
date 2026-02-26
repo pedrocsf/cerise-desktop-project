@@ -1,13 +1,5 @@
 #!/usr/bin/env bpftrace
 
-
-BEGIN
-{
-    printf("Monitoring privilege escalation attempts... Press Ctrl-C to end.\n");
-    printf("%-10s %-16s %-8s %-8s %-10s %s\n", 
-           "TIME", "COMM", "PID", "UID", "OPERATION", "DETAILS");
-}
-
 // setuid - change user ID
 tracepoint:syscalls:sys_enter_setuid
 {
@@ -51,11 +43,13 @@ tracepoint:syscalls:sys_enter_setreuid
 tracepoint:syscalls:sys_enter_setresuid
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-10s ruid=%d, euid=%d, suid=%d\n",
+    // Dividimos o printf em duas chamadas para não exceder o limite de argumentos do bpftrace.
+    printf("%-16s %-8d %-8d %-10s ",
            comm,
            pid,
            uid,
-           "setresuid",
+           "setresuid");
+    printf("ruid=%d, euid=%d, suid=%d\n",
            args->ruid,
            args->euid,
            args->suid);
@@ -70,9 +64,4 @@ tracepoint:syscalls:sys_enter_capset
            pid,
            uid,
            "capset");
-}
-
-END
-{
-    printf("\nMonitoring ended.\n");
 }

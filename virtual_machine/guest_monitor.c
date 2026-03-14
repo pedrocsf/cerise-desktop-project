@@ -1,0 +1,97 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <openssl/evp.h>
+#include <openssl/err.h>
+#include <openssl/aes.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <arpa/inet.h>
+
+#define BPFTRACE_COMMAND "sudo /usr/bin/bpftrace /home/cerise/Downloads/privilege_escalation.bt"
+#define SERIAL_DEVICE_PATH "/dev/vport0p1"
+
+static const uint8_t key[] = {'C', 'E', 'R', 'I', 'S', 'E', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static const uint8_t iv[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+
+void handle_openssl_errors(void)
+{
+    fprintf(stderr, "OpenSSL Error:\n");
+    ERR_print_errors_fp(stderr);
+    exit(EXIT_FAILURE);
+}
+
+int encrypt(unsigned char *plaintext, int plaintext_len, const unsigned char *key,
+            const unsigned char *iv, unsigned char *ciphertext)
+{
+    EVP_CIPHER_CTX *ctx;
+    int len;
+    int ciphertext_len;
+
+    if (!(ctx = EVP_CIPHER_CTX_new()))
+        handle_openssl_errors();
+
+    if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key, iv))
+        handle_openssl_errors();
+
+    if (1 != EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len))
+        handle_openssl_errors();
+    ciphertext_len = len;
+
+    if (1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len))
+        handle_openssl_errors();
+    ciphertext_len += len;
+
+    EVP_CIPHER_CTX_free(ctx);
+
+    return ciphertext_len;
+}
+
+int main()
+{
+    FILE *bpftrace_pipe;
+    int serial_fd;
+    char buffer[4096];
+
+    printf("Starting monitor and redirecting to %s...\n", SERIAL_DEVICE_PATH);
+    serial_fd = open(SERIAL_DEVICE_PATH, O_WRONLY);
+    if (serial_fd < 0)
+    {
+        perror("Error opening serial device");
+        fprintf(stderr, "Check if device '%s' exists and if you have permission.\n", SERIAL_DEVICE_PATH);
+        fprintf(stderr, "Was the VM started with the correct virtio-serial chardev?\n");
+        return EXIT_FAILURE;
+    }
+
+    bpftrace_pipe = popen(BPFTRACE_COMMAND, "r");
+    if (bpftrace_pipe == NULL)
+    {
+        perror("Error executing bpftrace command with popen");
+        close(serial_fd);
+        return EXIT_FAILURE;
+    }
+
+    printf("Monitoring active. Encrypted output is being sent to the host.\n");
+
+    while (fgets(buffer, sizeof(buffer), bpftrace_pipe) != NULL)
+    {
+        printf("[VM] Reading: %s", buffer);
+        fflush(stdout);
+
+        unsigned char ciphertext[sizeof(buffer) + AES_BLOCK_SIZE];
+        int ciphertext_len;
+
+        ciphertext_len = encrypt((unsigned char *)buffer, strlen(buffer), key, iv, ciphertext);
+
+        uint16_t payload_len_net = htons(ciphertext_len);
+        write(serial_fd, &payload_len_net, sizeof(payload_len_net));
+
+        write(serial_fd, ciphertext, ciphertext_len);
+    }
+
+    printf("Shutting down monitor...\n");
+    pclose(bpftrace_pipe);
+    close(serial_fd);
+
+    return EXIT_SUCCESS;
+}

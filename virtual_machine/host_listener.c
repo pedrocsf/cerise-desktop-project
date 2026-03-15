@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <arpa/inet.h>
+#include <sys/wait.h>
 
 static struct termios old_tty;
 static int serial_fd = -1;
@@ -68,19 +69,34 @@ ssize_t read_exact(int fd, void *buf, size_t count)
     return bytes_read_total;
 }
 
-int main(int argc, char *argv[])
+static void print_prefixed_line(const char *prefix, const char *text)
+{
+    size_t start = 0;
+    size_t len = strlen(text);
+
+    while (start < len)
+    {
+        size_t end = start;
+        while (end < len && text[end] != '\n')
+        {
+            end++;
+        }
+
+        printf("[%s] %.*s", prefix, (int)(end - start), text + start);
+        if (end < len && text[end] == '\n')
+        {
+            putchar('\n');
+            end++;
+        }
+
+        start = end;
+    }
+}
+
+static int listen_on_serial(const char *serial_device_path, int use_prefix)
 {
     unsigned char read_buffer[4096 + AES_BLOCK_SIZE];
     unsigned char decrypted_buffer[4096 + AES_BLOCK_SIZE];
-
-    if (argc != 2)
-    {
-        fprintf(stderr, "Usage: %s <serial_device_path>\n", argv[0]);
-        fprintf(stderr, "Example: %s /dev/pts/4\n", argv[0]);
-        return EXIT_FAILURE;
-    }
-
-    const char *serial_device_path = argv[1];
 
     printf("Waiting for encrypted data on %s...\n", serial_device_path);
 
@@ -144,13 +160,62 @@ int main(int argc, char *argv[])
         int decrypted_len;
         decrypted_len = decrypt(read_buffer, payload_bytes_read, key, iv, decrypted_buffer);
         decrypted_buffer[decrypted_len] = '\0';
-        printf("%s", (char *)decrypted_buffer);
+
+        if (use_prefix)
+        {
+            print_prefixed_line(serial_device_path, (char *)decrypted_buffer);
+        }
+        else
+        {
+            printf("%s", (char *)decrypted_buffer);
+        }
+
         fflush(stdout);
     }
 
     printf("\nConnection closed.\n");
     close(serial_fd);
     serial_fd = -1;
+
+    return EXIT_SUCCESS;
+}
+
+int main(int argc, char *argv[])
+{
+    if (argc < 2)
+    {
+        fprintf(stderr, "Usage: %s <serial_device_path> [serial_device_path ...]\n", argv[0]);
+        fprintf(stderr, "Example (single): %s /dev/pts/4\n", argv[0]);
+        fprintf(stderr, "Example (multi):  %s /dev/pts/4 /dev/pts/5 /dev/pts/6\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    if (argc == 2)
+    {
+        return listen_on_serial(argv[1], 0);
+    }
+
+    int child_count = 0;
+    for (int i = 1; i < argc; i++)
+    {
+        pid_t pid = fork();
+        if (pid == 0)
+        {
+            return listen_on_serial(argv[i], 1);
+        }
+        if (pid > 0)
+        {
+            child_count++;
+            continue;
+        }
+
+        perror("Failed to fork host listener child");
+    }
+
+    for (int i = 0; i < child_count; i++)
+    {
+        wait(NULL);
+    }
 
     return EXIT_SUCCESS;
 }

@@ -9,18 +9,38 @@
 
 #define QEMU_PID_FILE "qemu_vm.pid"
 
-#define QEMU_COMMAND "qemu-system-x86_64 "                                                     \
-                     "-m 8192 "                                                                \
-                     "-smp 6 "                                                                 \
-                     "-machine q35,accel=kvm "                                                 \
-                     "-cpu host "                                                              \
-                     "-drive file=/home/pacto/malware_vm.qcow2,format=qcow2,cache=writeback "  \
-                     "-netdev user,id=net0,hostfwd=tcp::2222-:22 "                             \
-                     "-device e1000,netdev=net0 "                                              \
-                     "-device virtio-serial-pci "                                              \
-                     "-chardev pty,id=privesc_channel "                                        \
-                     "-device virtserialport,chardev=privesc_channel,name=com.cerise.privesc " \
-                     "-pidfile " QEMU_PID_FILE " "                                             \
+#define QEMU_COMMAND "qemu-system-x86_64 "                                                    \
+                     "-m 8192 "                                                               \
+                     "-smp 6 "                                                                \
+                     "-machine q35,accel=kvm "                                                \
+                     "-cpu host "                                                             \
+                     "-drive file=/home/pacto/malware_vm.qcow2,format=qcow2,cache=writeback " \
+                     "-netdev user,id=net0,hostfwd=tcp::2222-:22 "                            \
+                     "-device e1000,netdev=net0 "                                             \
+                     "-device virtio-serial-pci,max_ports=16 "                                \
+                     "-chardev pty,id=ch1 "                                                   \
+                     "-device virtserialport,chardev=ch1,name=com.cerise.ch1 "                \
+                     "-chardev pty,id=ch2 "                                                   \
+                     "-device virtserialport,chardev=ch2,name=com.cerise.ch2 "                \
+                     "-chardev pty,id=ch3 "                                                   \
+                     "-device virtserialport,chardev=ch3,name=com.cerise.ch3 "                \
+                     "-chardev pty,id=ch4 "                                                   \
+                     "-device virtserialport,chardev=ch4,name=com.cerise.ch4 "                \
+                     "-chardev pty,id=ch5 "                                                   \
+                     "-device virtserialport,chardev=ch5,name=com.cerise.ch5 "                \
+                     "-chardev pty,id=ch6 "                                                   \
+                     "-device virtserialport,chardev=ch6,name=com.cerise.ch6 "                \
+                     "-chardev pty,id=ch7 "                                                   \
+                     "-device virtserialport,chardev=ch7,name=com.cerise.ch7 "                \
+                     "-chardev pty,id=ch8 "                                                   \
+                     "-device virtserialport,chardev=ch8,name=com.cerise.ch8 "                \
+                     "-chardev pty,id=ch9 "                                                   \
+                     "-device virtserialport,chardev=ch9,name=com.cerise.ch9 "                \
+                     "-chardev pty,id=ch10 "                                                  \
+                     "-device virtserialport,chardev=ch10,name=com.cerise.ch10 "              \
+                     "-chardev pty,id=ch11 "                                                  \
+                     "-device virtserialport,chardev=ch11,name=com.cerise.ch11 "              \
+                     "-pidfile " QEMU_PID_FILE " "                                            \
                      "-enable-kvm"
 
 pid_t qemu_pid = 0;

@@ -12,12 +12,13 @@ BEGIN
 tracepoint:syscalls:sys_enter_ptrace
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s request=%d, pid=%d\n",
+    printf("%-16s %-8d %-8d %-6d %-16s ",
            comm,
            pid,
            curtask->real_parent->pid,
            uid,
-           "ptrace",
+           "ptrace");
+    printf("request=%d, pid=%d\n",
            args->request,
            args->pid);
 }
@@ -26,12 +27,13 @@ tracepoint:syscalls:sys_enter_ptrace
 tracepoint:syscalls:sys_enter_mount
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s dev=%s, dir=%s, type=%s\n",
+    printf("%-16s %-8d %-8d %-6d %-16s ",
            comm,
            pid,
            curtask->real_parent->pid,
            uid,
-           "mount",
+           "mount");
+    printf("dev=%s, dir=%s, type=%s\n",
            str(args->dev_name),
            str(args->dir_name),
            str(args->type));
@@ -54,12 +56,13 @@ tracepoint:syscalls:sys_enter_umount
 tracepoint:syscalls:sys_enter_setns
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s fd=%d, nstype=%d\n",
+    printf("%-16s %-8d %-8d %-6d %-16s ",
            comm,
            pid,
            curtask->real_parent->pid,
            uid,
-           "setns",
+           "setns");
+    printf("fd=%d, nstype=%d\n",
            args->fd,
            args->nstype);
 }

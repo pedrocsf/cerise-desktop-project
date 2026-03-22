@@ -9,11 +9,8 @@
 #include <termios.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#include <errno.h>
 
-static struct termios old_tty;
-static int serial_fd = -1;
-
-void restore_terminal_settings(void);
 static const uint8_t key[] = {'C', 'E', 'R', 'I', 'S', 'E', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const uint8_t iv[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
 
@@ -58,6 +55,11 @@ ssize_t read_exact(int fd, void *buf, size_t count)
         ssize_t bytes_read_now = read(fd, (char *)buf + bytes_read_total, count - bytes_read_total);
         if (bytes_read_now < 0)
         {
+            if (errno == EINTR)
+            {
+                continue; // Interrupted by a signal, retry the read.
+            }
+            perror("read_exact"); // A real error occurred.
             return -1;
         }
         if (bytes_read_now == 0)
@@ -71,32 +73,29 @@ ssize_t read_exact(int fd, void *buf, size_t count)
 
 static void print_prefixed_line(const char *prefix, const char *text)
 {
-    size_t start = 0;
-    size_t len = strlen(text);
+    const char *start = text;
+    const char *end;
 
-    while (start < len)
+    while ((end = strchr(start, '\n')) != NULL)
     {
-        size_t end = start;
-        while (end < len && text[end] != '\n')
-        {
-            end++;
-        }
+        printf("[%s] %.*s\n", prefix, (int)(end - start), start);
+        start = end + 1;
+    }
 
-        printf("[%s] %.*s", prefix, (int)(end - start), text + start);
-        if (end < len && text[end] == '\n')
-        {
-            putchar('\n');
-            end++;
-        }
-
-        start = end;
+    if (*start)
+    {
+        printf("[%s] %s", prefix, start);
     }
 }
 
 static int listen_on_serial(const char *serial_device_path, int use_prefix)
 {
-    unsigned char read_buffer[4096 + AES_BLOCK_SIZE];
-    unsigned char decrypted_buffer[4096 + AES_BLOCK_SIZE];
+#define MAX_EVENT_SIZE 8192
+    int serial_fd = -1;
+    struct termios old_tty;
+
+    unsigned char read_buffer[MAX_EVENT_SIZE + AES_BLOCK_SIZE];
+    unsigned char decrypted_buffer[MAX_EVENT_SIZE + AES_BLOCK_SIZE];
 
     printf("Waiting for encrypted data on %s...\n", serial_device_path);
 
@@ -106,8 +105,6 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
         perror("Error opening serial device");
         return EXIT_FAILURE;
     }
-
-    atexit(restore_terminal_settings);
 
     struct termios tty;
 
@@ -119,11 +116,18 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
     old_tty = tty;
 
     cfmakeraw(&tty);
+    tty.c_cflag |= (CREAD | CLOCAL);
 
     if (tcsetattr(serial_fd, TCSANOW, &tty) != 0)
     {
         perror("Error in tcsetattr");
+        close(serial_fd);
         return EXIT_FAILURE;
+    }
+
+    if (tcflush(serial_fd, TCIFLUSH) == -1)
+    {
+        perror("tcflush failed");
     }
 
     while (1)
@@ -131,6 +135,12 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
         uint16_t payload_len_net;
 
         ssize_t len_bytes_read = read_exact(serial_fd, &payload_len_net, sizeof(payload_len_net));
+
+        if (len_bytes_read < 0)
+        {
+            fprintf(stderr, "\nError: Read operation failed while getting payload size.\n");
+            break;
+        }
 
         if (len_bytes_read == 0)
         {
@@ -151,6 +161,12 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
         }
 
         ssize_t payload_bytes_read = read_exact(serial_fd, read_buffer, payload_len);
+        if (payload_bytes_read < 0)
+        {
+            fprintf(stderr, "\nError: Read operation failed while getting payload data.\n");
+            break;
+        }
+
         if (payload_bytes_read < payload_len)
         {
             fprintf(stderr, "\nError: Incomplete payload. Expected %u, received %zd.\n", payload_len, payload_bytes_read);
@@ -174,8 +190,8 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
     }
 
     printf("\nConnection closed.\n");
+    tcsetattr(serial_fd, TCSANOW, &old_tty);
     close(serial_fd);
-    serial_fd = -1;
 
     return EXIT_SUCCESS;
 }
@@ -218,12 +234,4 @@ int main(int argc, char *argv[])
     }
 
     return EXIT_SUCCESS;
-}
-
-void restore_terminal_settings(void)
-{
-    if (serial_fd != -1)
-    {
-        tcsetattr(serial_fd, TCSANOW, &old_tty);
-    }
 }

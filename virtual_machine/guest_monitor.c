@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <arpa/inet.h>
+#include <errno.h>
 
 #define MAX_MONITORS 10
 
@@ -62,6 +63,26 @@ int encrypt(unsigned char *plaintext, int plaintext_len, const unsigned char *ke
     EVP_CIPHER_CTX_free(ctx);
 
     return ciphertext_len;
+}
+
+ssize_t write_exact(int fd, const void *buf, size_t count)
+{
+    size_t bytes_written_total = 0;
+    while (bytes_written_total < count)
+    {
+        ssize_t bytes_written_now = write(fd, (const char *)buf + bytes_written_total, count - bytes_written_total);
+        if (bytes_written_now < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            perror("write_exact");
+            return -1;
+        }
+        bytes_written_total += bytes_written_now;
+    }
+    return bytes_written_total;
 }
 
 static FILE *execute_command_and_get_pipe(const char *file, char *const argv[], pid_t *child_pid_out)
@@ -134,7 +155,8 @@ void run_monitor_instance(const MonitorConfig *config)
     FILE *command_pipe;
     pid_t command_pid = -1;
     int serial_fd;
-    char buffer[4096];
+#define MAX_EVENT_SIZE 8192
+    char buffer[MAX_EVENT_SIZE];
 
     printf("[PID %d] Starting monitor for %s -> %s\n", getpid(), config->bpftrace_script_path, config->serial_device_path);
 
@@ -179,7 +201,20 @@ void run_monitor_instance(const MonitorConfig *config)
         memcpy(message_to_send, &payload_len_net, sizeof(payload_len_net));
         memcpy(message_to_send + sizeof(payload_len_net), ciphertext, ciphertext_len);
 
-        write(serial_fd, message_to_send, sizeof(payload_len_net) + ciphertext_len);
+        size_t total_to_write = sizeof(payload_len_net) + ciphertext_len;
+        ssize_t written_bytes = write_exact(serial_fd, message_to_send, total_to_write);
+
+        if (written_bytes < 0)
+        {
+            fprintf(stderr, "[%s] Error writing to serial device. Shutting down this monitor.\n", config->serial_device_path);
+            break;
+        }
+        if ((size_t)written_bytes < total_to_write)
+        {
+            fprintf(stderr, "[%s] Incomplete write to serial device (wrote %zd of %zu). Shutting down.\n",
+                    config->serial_device_path, written_bytes, total_to_write);
+            break;
+        }
     }
 
     printf("[PID %d] Shutting down monitor for %s...\n", getpid(), config->bpftrace_script_path);

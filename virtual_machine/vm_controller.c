@@ -40,6 +40,7 @@
                      "-device virtserialport,chardev=ch10,name=com.cerise.ch10 "              \
                      "-chardev pty,id=ch11 "                                                  \
                      "-device virtserialport,chardev=ch11,name=com.cerise.ch11 "              \
+                     "-daemonize "                                                            \
                      "-pidfile " QEMU_PID_FILE " "                                            \
                      "-enable-kvm"
 

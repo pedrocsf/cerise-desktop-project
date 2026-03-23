@@ -44,7 +44,7 @@ int decrypt(unsigned char *ciphertext, int ciphertext_len, const unsigned char *
 
     if (!(ctx = EVP_CIPHER_CTX_new()))
     {
-        handle_openssl_errors(err_prefix); // Prints details
+        handle_openssl_errors(err_prefix);
         return -1;
     }
 
@@ -64,7 +64,7 @@ int decrypt(unsigned char *ciphertext, int ciphertext_len, const unsigned char *
     plaintext_len = len;
 
     if (1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len))
-    { // This is where "bad decrypt" usually happens
+    {
         handle_openssl_errors(err_prefix);
         EVP_CIPHER_CTX_free(ctx);
         return -1;
@@ -86,9 +86,9 @@ ssize_t read_exact(int fd, void *buf, size_t count)
         {
             if (errno == EINTR)
             {
-                continue; // Interrupted by a signal, retry the read.
+                continue;
             }
-            perror("read_exact"); // A real error occurred.
+            perror("read_exact");
             return -1;
         }
         if (bytes_read_now == 0)
@@ -114,7 +114,6 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
     serial_fd = open(serial_device_path, O_RDONLY);
     if (serial_fd < 0)
     {
-        // Use fprintf with prefix for consistency
         if (use_prefix)
             fprintf(stderr, "[%s] Error opening serial device: %s\n", serial_device_path, strerror(errno));
         else
@@ -154,7 +153,6 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
             fprintf(stderr, "[%s] Warning: tcflush failed: %s\n", serial_device_path, strerror(errno));
         else
             fprintf(stderr, "Warning: tcflush failed: %s\n", strerror(errno));
-        // This is not a fatal error, so we continue
     }
 
     while (1)
@@ -187,7 +185,6 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
 
         uint16_t payload_len = ntohs(payload_len_net);
 
-        // 1. Check if payload is too large for the buffer
         if (payload_len > sizeof(read_buffer))
         {
             if (use_prefix)
@@ -197,7 +194,6 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
             break;
         }
 
-        // 2. Check if payload size is valid for AES-CBC (must be a non-zero multiple of block size)
         if (payload_len == 0 || payload_len % AES_BLOCK_SIZE != 0)
         {
             if (use_prefix)
@@ -235,11 +231,10 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
                 fprintf(stderr, "[%s] Decryption failed. The stream may be corrupted. Stopping this listener.\n", serial_device_path);
             else
                 fprintf(stderr, "Decryption failed. The stream may be corrupted. Stopping this listener.\n");
-            break; // Stop processing this stream
+            break;
         }
         decrypted_buffer[decrypted_len] = '\0';
 
-        // Trim trailing whitespace (like \n, \r, etc.) from the decrypted string
         char *end = (char *)decrypted_buffer + decrypted_len - 1;
         while (end >= (char *)decrypted_buffer && isspace((unsigned char)*end))
         {

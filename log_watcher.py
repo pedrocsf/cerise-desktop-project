@@ -6,6 +6,8 @@ import subprocess
 import re
 from llama import send_for_analysis
 
+ANSI_ESCAPE_RE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+
 # --- Configuration ---
 SERIAL_DEVICES = ["/dev/pts/4", "/dev/pts/5", "/dev/pts/6", "/dev/pts/7"]
 HOST_LISTENER_PATH = "virtual_machine/host_listener"
@@ -15,7 +17,7 @@ COLLECTION_NAME = "security_docs"
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 CONTEXT_RESULTS = 1
 
-BATCH_SIZE = 50
+BATCH_SIZE = 1
 
 PROMPT_TEMPLATE = """### Instruction:
 Act as a cybersecurity analyst. Review the logs below for malicious activity based on the provided context.
@@ -77,8 +79,27 @@ def show_header():
     """Displays the program header."""
     clear_screen()
     print("╔════════════════════════════════════════════════════════════╗")
-    print("║            CERISE LOG WATCHER - CONTINUOUS ANALYSIS            ║")
+    print("║            CERISE LOG WATCHER - CONTINUOUS ANALYSIS         ║")
     print("╚════════════════════════════════════════════════════════════╝\n")
+
+def emit_line(message):
+    """Escreve sempre no início da linha, limpando resíduos visuais do terminal."""
+    sys.stdout.write(f"\r\033[K{message}\n")
+    sys.stdout.flush()
+
+def print_block(tag, title, content):
+    """Prints a multiline block with consistent indentation."""
+    emit_line(f"[{tag}] {title}")
+    for block_line in content.splitlines():
+        emit_line(f"      {block_line}")
+
+def sanitize_output_line(line):
+    """Normaliza uma linha para evitar desalinhamento visual no terminal."""
+    # Remove sequências ANSI, CR e outros controles invisíveis que quebram o cursor.
+    line = ANSI_ESCAPE_RE.sub('', line)
+    line = line.replace('\r', '')
+    line = ''.join(ch for ch in line if ch.isprintable() or ch == '\t')
+    return line.strip()
 
 def main():
     """
@@ -86,46 +107,49 @@ def main():
     lotes para análise de IA.
     """
     show_header()
-
+    
     if not os.path.exists(HOST_LISTENER_PATH) or not os.access(HOST_LISTENER_PATH, os.X_OK):
         print(f"[ERRO] Executável do listener não encontrado ou não executável em '{HOST_LISTENER_PATH}'.")
         print("Por favor, compile-o primeiro, por exemplo:")
         print("  gcc -o virtual_machine/host_listener virtual_machine/host_listener.c -lssl -lcrypto")
         return
 
-    print(f"Iniciando o host listener para os dispositivos: {', '.join(SERIAL_DEVICES)}")
-    print("O watcher agora processará o stream ao vivo para análise contínua por IA...")
-    print("Press Ctrl+C to stop.")
-
-    rag_retriever = RagRetriever()
-
-    # Estado para cada fluxo de dados (identificado pela porta serial)
-    stream_states = {device: {'pending_lines': []} for device in SERIAL_DEVICES}
-    # Adiciona um estado padrão para o modo de dispositivo único (sem prefixos)
-    if len(SERIAL_DEVICES) == 1:
-        stream_states["default"] = {'pending_lines': []}
-
-    command = ['stdbuf', '-o0', HOST_LISTENER_PATH] + SERIAL_DEVICES
     proc = None
 
     try:
+        emit_line(f"[INFO] Iniciando host_listener para: {', '.join(SERIAL_DEVICES)}")
+        emit_line("[INFO] Logs brutos e análise da IA serão exibidos nesta mesma janela.")
+        emit_line("[INFO] Pressione Ctrl+C para parar.")
+
+        rag_retriever = RagRetriever()
+
+        # Estado para cada fluxo de dados
+        stream_states = {device: {'pending_lines': []} for device in SERIAL_DEVICES}
+        if len(SERIAL_DEVICES) == 1:
+            stream_states["default"] = {'pending_lines': []}
+
+        command = ['stdbuf', '-o0', HOST_LISTENER_PATH] + SERIAL_DEVICES
+        
         proc = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, # Redireciona stderr para stdout para capturar tudo
+            stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1  # Buffer por linha
+            bufsize=1
         )
 
         use_prefix_parsing = len(SERIAL_DEVICES) > 1
 
         for line in proc.stdout:
-            line = line.strip()
+            line = sanitize_output_line(line)
             if not line:
                 continue
 
+            # Sempre exibe o log bruto recebido do host_listener.
+            emit_line(f"[RAW] {line}")
+
             if "Waiting for encrypted data" in line or "Connection closed" in line:
-                print(f"[INFO] {line}")
+                # Já foi exibida em [RAW], evita duplicidade visual.
                 continue
 
             stream_id = "default"
@@ -137,18 +161,15 @@ def main():
                     stream_id = match.group(1)
                     log_content = match.group(2).strip()
                 else:
-                    print(f"[AVISO] Linha sem prefixo em modo multi-dispositivo: {line}")
+                    # Linha sem prefixo (provavelmente do próprio listener), já foi para o log.
                     continue
 
             if "Attaching " in log_content and "probes" in log_content:
-                print(f"[INFO] Pulando cabeçalho do bpftrace para o stream '{stream_id}': {log_content}")
+                emit_line(f"[INFO] Pulando cabeçalho do bpftrace para o stream '{stream_id}': {log_content}")
                 continue
 
-            # Imprime a linha de log que será processada
-            print(line)
-
             if stream_id not in stream_states:
-                print(f"[AVISO] Recebidos dados de um stream inesperado: {stream_id}")
+                emit_line(f"[AVISO] Recebidos dados de um stream inesperado: {stream_id}")
                 continue
 
             state = stream_states[stream_id]
@@ -158,37 +179,37 @@ def main():
                 batch_to_send = state['pending_lines'][:BATCH_SIZE]
                 state['pending_lines'] = state['pending_lines'][BATCH_SIZE:]
 
-                print(f"\n--- Lote de {len(batch_to_send)} eventos do stream '{stream_id}' pronto para análise ---")
+                emit_line("")
+                emit_line(f"[BATCH] Stream='{stream_id}' | Eventos={len(batch_to_send)} | Status=pronto para análise")
                 log_batch_content = "\n".join(batch_to_send)
+
                 rag_context = rag_retriever.retrieve_context(log_batch_content)
 
-                print("═════════ CONTEXTO RAG RECUPERADO ═════════")
-                print(rag_context)
-                print("═════════════════════════════════════════")
+                print_block("RAG", f"Contexto recuperado para stream '{stream_id}'", rag_context)
 
                 full_prompt = PROMPT_TEMPLATE.format(rag_context=rag_context, log_content=log_batch_content)
 
-                print("Analisando com IA...")
+                emit_line(f"[IA] Iniciando processamento do lote de {len(batch_to_send)} eventos do stream '{stream_id}'...")
                 analysis = send_for_analysis(full_prompt)
                 if analysis:
-                    print("═══════════ ANÁLISE DA IA ═══════════")
-                    print(analysis)
-                    print("═══════════════════════════════════")
+                    print_block("IA", f"Resultado da análise do stream '{stream_id}'", analysis)
 
     except KeyboardInterrupt:
-        print("\nParando o Cerise Log Watcher.")
+        emit_line("")
+        emit_line("[INFO] Parando o Cerise Log Watcher.")
     except Exception as e:
-        print(f"\nOcorreu um erro inesperado: {e}")
+        emit_line("")
+        emit_line(f"[ERRO] Ocorreu um erro inesperado: {e}")
     finally:
         if proc and proc.poll() is None:
-            print("Encerrando o processo do listener...")
+            emit_line("[INFO] Encerrando o processo do listener...")
             proc.terminate()
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                print("O listener não encerrou, forçando o encerramento.")
+                emit_line("[AVISO] O listener não encerrou, forçando o encerramento.")
                 proc.kill()
-            print("Listener parado.")
+            emit_line("[INFO] Listener parado.")
 
 if __name__ == "__main__":
     main()

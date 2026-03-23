@@ -1,32 +1,19 @@
 import os
-import time
-from llama import send_for_analysis
 import chromadb
 from chromadb.utils import embedding_functions
+import sys
+import subprocess
+import re
+from llama import send_for_analysis
 
-LOG_DIR = "logs"
-POLL_INTERVAL = 2      
-HEADER_SKIP_LINES = 0  
+# --- Configuration ---
+SERIAL_DEVICES = ["/dev/pts/4", "/dev/pts/5", "/dev/pts/6", "/dev/pts/7"]
+HOST_LISTENER_PATH = "virtual_machine/host_listener"
 
-# --- RAG Configuration ---
 DB_DIR = "vector_db"
 COLLECTION_NAME = "security_docs"
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 CONTEXT_RESULTS = 1
-
-
-CRITICAL_SCRIPTS = [
-    "sensitive_file_access",
-    "suspicious_exec",
-    "dangerous_syscalls",
-    "privilege_escalation",
-    "network_suspicious",
-    "kernel_module_load",
-    "fileless_execution",
-    "docker_socket_access",
-    "log_tampering",
-    "test"
-]
 
 BATCH_SIZE = 50
 
@@ -44,7 +31,7 @@ ANALYSIS: <Short explanation>
 {rag_context}
 
 ### Input Logs:
-{log_batch}
+{log_content}
 
 ### Response:
 """
@@ -55,16 +42,20 @@ class RagRetriever:
         self.collection = None
         try:
             print("Initializing RAG retriever...")
-            client = chromadb.PersistentClient(path=DB_DIR)
+            print(f"Loading embedding model '{MODEL_NAME}'. This may take a while on the first run...")
             embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
                 model_name=MODEL_NAME,
                 trust_remote_code=True
             )
+            print("Embedding model loaded.")
+
+            print(f"Connecting to vector database at '{DB_DIR}'...")
+            client = chromadb.PersistentClient(path=DB_DIR)
             self.collection = client.get_collection(
                 name=COLLECTION_NAME,
                 embedding_function=embedding_function
             )
-            print("RAG retriever initialized successfully.")
+            print("RAG retriever is ready.")
         except Exception as e:
             print(f"Error initializing RAG retriever: {e}\nAnalysis will proceed without RAG context.")
 
@@ -78,13 +69,6 @@ class RagRetriever:
             return "No relevant context found in the knowledge base."
         return "\n\n---\n\n".join(context_docs)
 
-def is_critical(log_filename):
-    """Checks if the log filename corresponds to a critical script."""
-    for script_name in CRITICAL_SCRIPTS:
-        if script_name in log_filename:
-            return True
-    return False
-
 def clear_screen():
     """Clears the terminal screen."""
     os.system('clear' if os.name == 'posix' else 'cls')
@@ -97,78 +81,114 @@ def show_header():
     print("╚════════════════════════════════════════════════════════════╝\n")
 
 def main():
+    """
+    Executa o host_listener, captura sua saída ao vivo e a envia em
+    lotes para análise de IA.
+    """
     show_header()
-    print("Starting Cerise Log Watcher for continuous AI analysis...")
-    print(f"Monitoring directory: '{LOG_DIR}'")
-    print(f"Critical scripts: {', '.join(CRITICAL_SCRIPTS)}")
+
+    if not os.path.exists(HOST_LISTENER_PATH) or not os.access(HOST_LISTENER_PATH, os.X_OK):
+        print(f"[ERRO] Executável do listener não encontrado ou não executável em '{HOST_LISTENER_PATH}'.")
+        print("Por favor, compile-o primeiro, por exemplo:")
+        print("  gcc -o virtual_machine/host_listener virtual_machine/host_listener.c -lssl -lcrypto")
+        return
+
+    print(f"Iniciando o host listener para os dispositivos: {', '.join(SERIAL_DEVICES)}")
+    print("O watcher agora processará o stream ao vivo para análise contínua por IA...")
     print("Press Ctrl+C to stop.")
 
     rag_retriever = RagRetriever()
-    file_states = {}
+
+    # Estado para cada fluxo de dados (identificado pela porta serial)
+    stream_states = {device: {'pending_lines': []} for device in SERIAL_DEVICES}
+    # Adiciona um estado padrão para o modo de dispositivo único (sem prefixos)
+    if len(SERIAL_DEVICES) == 1:
+        stream_states["default"] = {'pending_lines': []}
+
+    command = ['stdbuf', '-o0', HOST_LISTENER_PATH] + SERIAL_DEVICES
+    proc = None
 
     try:
-        while True:
-            for filename in os.listdir(LOG_DIR):
-                if not filename.endswith(".log"):
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, # Redireciona stderr para stdout para capturar tudo
+            text=True,
+            bufsize=1  # Buffer por linha
+        )
+
+        use_prefix_parsing = len(SERIAL_DEVICES) > 1
+
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+
+            if "Waiting for encrypted data" in line or "Connection closed" in line:
+                print(f"[INFO] {line}")
+                continue
+
+            stream_id = "default"
+            log_content = line
+
+            if use_prefix_parsing:
+                match = re.match(r'^\[([^\]]+)\]\s*(.*)', line)
+                if match:
+                    stream_id = match.group(1)
+                    log_content = match.group(2).strip()
+                else:
+                    print(f"[AVISO] Linha sem prefixo em modo multi-dispositivo: {line}")
                     continue
 
-                filepath = os.path.join(LOG_DIR, filename)
+            if "Attaching " in log_content and "probes" in log_content:
+                print(f"[INFO] Pulando cabeçalho do bpftrace para o stream '{stream_id}': {log_content}")
+                continue
 
-                if not is_critical(filename):
-                    continue
+            # Imprime a linha de log que será processada
+            print(line)
 
-                state = file_states.setdefault(filepath, {'pos': 0, 'lines_seen': 0, 'pending_lines': []})
+            if stream_id not in stream_states:
+                print(f"[AVISO] Recebidos dados de um stream inesperado: {stream_id}")
+                continue
 
-                try:
-                    with open(filepath, 'r') as f:
-                        f.seek(state['pos'])
-                        new_lines = f.readlines()
-                        state['pos'] = f.tell()
+            state = stream_states[stream_id]
+            state['pending_lines'].append(log_content)
 
-                    if not new_lines:
-                        continue
+            if len(state['pending_lines']) >= BATCH_SIZE:
+                batch_to_send = state['pending_lines'][:BATCH_SIZE]
+                state['pending_lines'] = state['pending_lines'][BATCH_SIZE:]
 
-                    for line in new_lines:
-                        state['lines_seen'] += 1
-                        if state['lines_seen'] > HEADER_SKIP_LINES and line.strip():
-                            state['pending_lines'].append(line)
+                print(f"\n--- Lote de {len(batch_to_send)} eventos do stream '{stream_id}' pronto para análise ---")
+                log_batch_content = "\n".join(batch_to_send)
+                rag_context = rag_retriever.retrieve_context(log_batch_content)
 
-                    while len(state['pending_lines']) >= BATCH_SIZE:
-                        batch_to_send = state['pending_lines'][:BATCH_SIZE]
-                        state['pending_lines'] = state['pending_lines'][BATCH_SIZE:]
+                print("═════════ CONTEXTO RAG RECUPERADO ═════════")
+                print(rag_context)
+                print("═════════════════════════════════════════")
 
-                        print(f"\n--- Batch of {len(batch_to_send)} critical events from '{filename}' ready for analysis ---")
-                        
-                        log_batch_content = "".join(batch_to_send)
+                full_prompt = PROMPT_TEMPLATE.format(rag_context=rag_context, log_content=log_batch_content)
 
-                        rag_context = rag_retriever.retrieve_context(log_batch_content)
-                        
-                        print("═════════ RETRIEVED RAG CONTEXT ═════════")
-                        print(rag_context)
-                        print("═════════════════════════════════════════")
+                print("Analisando com IA...")
+                analysis = send_for_analysis(full_prompt)
+                if analysis:
+                    print("═══════════ ANÁLISE DA IA ═══════════")
+                    print(analysis)
+                    print("═══════════════════════════════════")
 
-                        full_prompt = PROMPT_TEMPLATE.format(rag_context=rag_context, log_batch=log_batch_content)
-
-                        print("Analyzing with AI...")
-                        analysis = send_for_analysis(full_prompt)
-                        if analysis:
-                            print("═══════════ AI ANALYSIS ═══════════")
-                            print(analysis)
-                            print("═══════════════════════════════════")
-
-                except FileNotFoundError:
-                    if filepath in file_states:
-                        del file_states[filepath]
-                    continue
-                except Exception as e:
-                    print(f"Error processing file {filepath}: {e}")
-
-            time.sleep(POLL_INTERVAL)
     except KeyboardInterrupt:
-        print("\nStopping Cerise Log Watcher.")
+        print("\nParando o Cerise Log Watcher.")
+    except Exception as e:
+        print(f"\nOcorreu um erro inesperado: {e}")
+    finally:
+        if proc and proc.poll() is None:
+            print("Encerrando o processo do listener...")
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("O listener não encerrou, forçando o encerramento.")
+                proc.kill()
+            print("Listener parado.")
 
 if __name__ == "__main__":
-    if not os.path.exists(LOG_DIR):
-        print(f"Error: Log directory '{LOG_DIR}' not found. Run a background script first.")
-    else:
-        main()
+    main()

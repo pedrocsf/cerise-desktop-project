@@ -1,11 +1,3 @@
-/*
- * fileless_execution.bt - Rastreia a criação de file descriptors anônimos em memória.
- *
- * Detecta o uso da syscall memfd_create, uma técnica comum para "fileless execution",
- * onde um malware é executado diretamente da memória sem tocar no disco.
- *
- * USAGE: sudo bpftrace fileless_execution.bt
- */
 tracepoint:syscalls:sys_enter_memfd_create
 {
     printf("{\"event\": \"fileless_execution_memfd\", \"comm\": \"%s\", \"pid\": %d, \"uid\": %d, \"name\": \"%s\"}\n", comm, pid, uid, str(args->name));

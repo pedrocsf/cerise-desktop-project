@@ -1,11 +1,3 @@
-/*
- * docker_socket_access.bt - Rastreia o acesso ao socket do Docker.
- *
- * Monitora processos que tentam se conectar ao /var/run/docker.sock.
- * Acesso não autorizado pode levar a um escape de contêiner.
- *
- * USAGE: sudo bpftrace docker_socket_access.bt
- */
 tracepoint:syscalls:sys_enter_connect
 {
     // AF_UNIX = 1

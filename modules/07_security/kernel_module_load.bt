@@ -1,11 +1,3 @@
-/*
- * kernel_module_load.bt - Rastreia o carregamento de módulos do kernel.
- *
- * Detecta tentativas de carregar módulos do kernel (insmod/modprobe),
- * uma técnica comum para rootkits.
- *
- * USAGE: sudo bpftrace kernel_module_load.bt
- */
 tracepoint:syscalls:sys_enter_finit_module
 {
     printf("{\"event\": \"kernel_module_load\", \"comm\": \"%s\", \"pid\": %d, \"uid\": %d}\n", comm, pid, uid);

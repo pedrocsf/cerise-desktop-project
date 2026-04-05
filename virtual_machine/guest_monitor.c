@@ -20,10 +20,15 @@ typedef struct
 } MonitorConfig;
 
 MonitorConfig configs[] = {
-    {"/home/cerise/Downloads/privilege_escalation.bt", "/dev/vport0p1"},
-    {"/home/cerise/Downloads/privilege_escalation.bt", "/dev/vport0p2"},
-    {"/home/cerise/Downloads/privilege_escalation.bt", "/dev/vport0p3"},
-    {"/home/cerise/Downloads/privilege_escalation.bt", "/dev/vport0p4"},
+    {"/home/cerise/Downloads/dangerous_syscalls.bt", "/dev/vport0p1"},
+    {"/home/cerise/Downloads/docker_socket_acess.bt", "/dev/vport0p2"},
+    {"/home/cerise/Downloads/fileless_execution.bt", "/dev/vport0p3"},
+    {"/home/cerise/Downloads/kernel_module_load.bt", "/dev/vport0p4"},
+    {"/home/cerise/Downloads/log_tampering.bt", "/dev/vport0p5"},
+    {"/home/cerise/Downloads/network_suspicious.bt", "/dev/vport0p6"},
+    {"/home/cerise/Downloads/privilege_escalation.bt", "/dev/vport0p7"},
+    {"/home/cerise/Downloads/sensitive_file_acess.bt", "/dev/vport0p8"},
+    {"/home/cerise/Downloads/suspicious_exec.bt", "/dev/vport0p9"},
 };
 
 static const uint8_t key[] = {'C', 'E', 'R', 'I', 'S', 'E', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};

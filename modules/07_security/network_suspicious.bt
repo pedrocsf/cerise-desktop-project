@@ -1,11 +1,8 @@
 #!/usr/bin/env bpftrace
 
-
 BEGIN
 {
     printf("Monitoring suspicious network activity... Press Ctrl-C to end.\n");
-    printf("%-10s %-16s %-8s %-8s %-6s %-20s %s\n", 
-           "TIME", "COMM", "PID", "UID", "PORT", "IP", "FLAGS");
     
     // Common suspicious ports
     @suspicious_ports[4444] = 1;  // Metasploit default
@@ -16,45 +13,50 @@ BEGIN
 
 tracepoint:syscalls:sys_enter_connect
 {
-    $sa = (struct sockaddr *)args->uservaddr;
+    // Get the sockaddr family from the first 2 bytes of uservaddr
+    $addr = (uint64)args->uservaddr;
+    $sa_family = *(uint16 *)$addr;
     
-    if ($sa->sa_family == 2) // AF_INET
+    if ($sa_family == 2) // AF_INET
     {
-        $s = (struct sockaddr_in *)args->uservaddr;
-        $port = ($s->sin_port >> 8) | (($s->sin_port << 8) & 0xff00);
-        $addr = ntop(2, &$s->sin_addr.s_addr);
+        // struct sockaddr_in layout:
+        // sin_family (2 bytes) + sin_port (2 bytes) + sin_addr (4 bytes)
+        $port_network = *(uint16 *)($addr + 2);
+        // Convert from network byte order to host byte order
+        $port = ($port_network >> 8) | (($port_network << 8) & 0xff00);
+        
+        $addr_int = *(uint32 *)($addr + 4);
         
         $suspicious = 0;
-        $flags = "";
         
         // Check for suspicious ports
         if (@suspicious_ports[$port]) {
             $suspicious = 1;
-            $flags = "[SUSPICIOUS_PORT]";
         }
         
         // Check for shell processes making connections
         if (comm == "sh" || comm == "bash" || comm == "dash" || 
             comm == "zsh" || comm == "nc" || comm == "ncat") {
             $suspicious = 1;
-            $flags = str($flags, " [SHELL_CONNECT]");
         }
         
-        // Check for connections to localhost from unexpected processes
-        if ($addr == "127.0.0.1" && $port > 10000) {
-            $suspicious = 1;
-            $flags = str($flags, " [HIGH_PORT_LOCALHOST]");
+        // Convert IP to first octet for localhost check
+        $a = ($addr_int & 0xff);
+        
+        // Check for localhost
+        if ($a == 127) {
+            if ($port > 10000) {
+                $suspicious = 1;
+            }
         }
         
         if ($suspicious) {
-            time("%H:%M:%S  ");
-            printf("%-16s %-8d %-8d %-6d %-20s %s\n",
+            printf("COMM: %-10s PID: %-6d UID: %-6d IP: %-15d:%d FLAGS: SUSPICIOUS\n",
                    comm,
                    pid,
                    uid,
-                   $port,
-                   $addr,
-                   $flags);
+                   $a,
+                   $port);
         }
     }
 }

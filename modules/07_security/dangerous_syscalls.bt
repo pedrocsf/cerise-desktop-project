@@ -4,18 +4,17 @@
 BEGIN
 {
     printf("Monitoring dangerous syscalls... Press Ctrl-C to end.\n");
-    printf("%-10s %-16s %-8s %-8s %-6s %-16s %s\n", 
-           "TIME", "COMM", "PID", "PPID", "UID", "SYSCALL", "DETAILS");
+    printf("%-10s %-16s %-8s %-6s ", "TIME", "COMM", "PID", "UID");
+    printf("%-16s %s\n", "SYSCALL", "DETAILS");
 }
 
 // ptrace - process debugging/injection
 tracepoint:syscalls:sys_enter_ptrace
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s ",
+    printf("%-16s %-8d %-6d %-16s ",
            comm,
            pid,
-           curtask->real_parent->pid,
            uid,
            "ptrace");
     printf("request=%d, pid=%d\n",
@@ -27,10 +26,9 @@ tracepoint:syscalls:sys_enter_ptrace
 tracepoint:syscalls:sys_enter_mount
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s ",
+    printf("%-16s %-8d %-6d %-16s ",
            comm,
            pid,
-           curtask->real_parent->pid,
            uid,
            "mount");
     printf("dev=%s, dir=%s, type=%s\n",
@@ -43,10 +41,9 @@ tracepoint:syscalls:sys_enter_mount
 tracepoint:syscalls:sys_enter_umount
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s target=%s\n",
+    printf("%-16s %-8d %-6d %-16s target=%s\n",
            comm,
            pid,
-           curtask->real_parent->pid,
            uid,
            "umount",
            str(args->name));
@@ -56,10 +53,9 @@ tracepoint:syscalls:sys_enter_umount
 tracepoint:syscalls:sys_enter_setns
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s ",
+    printf("%-16s %-8d %-6d %-16s ",
            comm,
            pid,
-           curtask->real_parent->pid,
            uid,
            "setns");
     printf("fd=%d, nstype=%d\n",
@@ -71,10 +67,9 @@ tracepoint:syscalls:sys_enter_setns
 tracepoint:syscalls:sys_enter_unshare
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s flags=0x%x\n",
+    printf("%-16s %-8d %-6d %-16s flags=0x%x\n",
            comm,
            pid,
-           curtask->real_parent->pid,
            uid,
            "unshare",
            args->unshare_flags);
@@ -84,10 +79,9 @@ tracepoint:syscalls:sys_enter_unshare
 tracepoint:syscalls:sys_enter_bpf
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s cmd=%d\n",
+    printf("%-16s %-8d %-6d %-16s cmd=%d\n",
            comm,
            pid,
-           curtask->real_parent->pid,
            uid,
            "bpf",
            args->cmd);
@@ -97,10 +91,9 @@ tracepoint:syscalls:sys_enter_bpf
 tracepoint:syscalls:sys_enter_kexec_load
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s entry=0x%lx\n",
+    printf("%-16s %-8d %-6d %-16s entry=0x%lx\n",
            comm,
            pid,
-           curtask->real_parent->pid,
            uid,
            "kexec_load",
            args->entry);
@@ -110,10 +103,9 @@ tracepoint:syscalls:sys_enter_kexec_load
 tracepoint:syscalls:sys_enter_chroot
 {
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-8d %-6d %-16s path=%s\n",
+    printf("%-16s %-8d %-6d %-16s path=%s\n",
            comm,
            pid,
-           curtask->real_parent->pid,
            uid,
            "chroot",
            str(args->filename));

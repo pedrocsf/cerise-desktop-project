@@ -1,4 +1,4 @@
 tracepoint:syscalls:sys_enter_memfd_create
 {
-    printf("{\"event\": \"fileless_execution_memfd\", \"comm\": \"%s\", \"pid\": %d, \"uid\": %d, \"name\": \"%s\"}\n", comm, pid, uid, str(args->name));
+    printf("{\"e\":\"fm\",\"c\":\"%s\",\"p\":%d,\"u\":%d,\"n\":\"%s\"}\n", comm, pid, uid, str(args->uname));
 }

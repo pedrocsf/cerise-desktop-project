@@ -4,33 +4,34 @@
 BEGIN
 {
     printf("Monitoring suspicious executions... Press Ctrl-C to end.\n");
-    printf("%-10s %-16s %-8s %-8s %-6s %-8s %s\n", 
-           "TIME", "COMM", "PID", "PPID", "UID", "TTY", "PATH");
+    printf("%-10s %-16s %-8s %-6s %s\n", 
+           "TIME", "COMM", "PID", "UID", "PATH");
 }
 
 tracepoint:syscalls:sys_enter_execve
 {
     $filename = str(args->filename);
-    $has_tty = curtask->signal->tty != 0 ? 1 : 0;
     
     // Flag 1: Execution from temporary/suspicious directories
     $suspicious_path = 0;
-    if ($filename =~ "/tmp/*" ||
-        $filename =~ "/dev/shm/*" ||
-        $filename =~ "/var/tmp/*")
+    if (strncmp($filename, "/tmp/", 5) == 0 ||
+        strncmp($filename, "/dev/shm/", 9) == 0 ||
+        strncmp($filename, "/var/tmp/", 9) == 0)
     {
         $suspicious_path = 1;
     }
     
     // Flag 2: No TTY (potential automated/backdoor execution)
-    $no_tty = !$has_tty;
+    $no_tty = 0;
     
     // Flag 3: Unexpected user (non-root running privileged commands)
     $unexpected_user = 0;
     if (uid != 0 && uid != 1000 && 
-        ($filename =~ "*/sudo" || 
-         $filename =~ "*/su" ||
-         $filename =~ "*/pkexec"))
+        ($filename == "/usr/bin/sudo" || 
+         $filename == "/bin/su" ||
+         $filename == "/usr/bin/su" ||
+         $filename == "/usr/bin/pkexec" ||
+         $filename == "/bin/pkexec"))
     {
         $unexpected_user = 1;
     }
@@ -38,18 +39,16 @@ tracepoint:syscalls:sys_enter_execve
     // Report if any suspicious condition is met
     if ($suspicious_path || $no_tty || $unexpected_user)
     {
+        printf("TIME: ");
         time("%H:%M:%S  ");
-        printf("%-16s %-8d %-8d %-6d %-8s %s",
+        printf("COMM: %-16s PID: %-8d UID: %-6d PATH: %s FLAGS:",
                comm,
                pid,
-               curtask->real_parent->pid,
                uid,
-               $has_tty ? "YES" : "NO",
                $filename);
         
         // Add warning flags
         if ($suspicious_path) { printf(" [SUSPICIOUS_PATH]"); }
-        if ($no_tty) { printf(" [NO_TTY]"); }
         if ($unexpected_user) { printf(" [UNEXPECTED_USER]"); }
         printf("\n");
     }

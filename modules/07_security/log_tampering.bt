@@ -4,7 +4,7 @@
 tracepoint:syscalls:sys_enter_openat
 {
     $filename = str(args->filename);
-    if ( (strstr($filename, "/var/log/") == $filename || strstr($filename, "/var/adm/") == $filename) && (args->flags & (O_WRONLY | O_RDWR)) ) {
-        printf("{\"event\": \"log_tampering_attempt\", \"comm\": \"%s\", \"pid\": %d, \"uid\": %d, \"file\": \"%s\"}\n", comm, pid, uid, $filename);
+    if ( (strncmp($filename, "/var/log/", 9) == 0 || strncmp($filename, "/var/adm/", 8) == 0) && (args->flags & (O_WRONLY | O_RDWR)) ) {
+        printf("{\"e\":\"log_tamp\",\"c\":\"%s\",\"p\":%d,\"u\":%d,\"f\":\"%s\"}\n", comm, pid, uid, $filename);
     }
 }

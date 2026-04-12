@@ -1,12 +1,12 @@
 tracepoint:syscalls:sys_enter_connect
 {
     // AF_UNIX = 1
-    if (args->servaddr->sa_family == 1)
+    if (args->addr->sa_family == 1)
     {
-        $sun_path = ((struct sockaddr_un *)args->servaddr)->sun_path;
+        $sun_path = ((struct sockaddr_un *)args->addr)->sun_path;
         if (str($sun_path) == "/var/run/docker.sock")
         {
-            printf("{\"event\": \"docker_socket_access\", \"comm\": \"%s\", \"pid\": %d, \"uid\": %d, \"socket_path\": \"%s\"}\n", comm, pid, uid, str($sun_path));
+            printf("{\"evt\":\"docker_sock\",\"comm\":\"%s\",\"pid\":%d,\"uid\":%d,\"path\":\"%s\"}\n", comm, pid, uid, str($sun_path));
         }
     }
 }

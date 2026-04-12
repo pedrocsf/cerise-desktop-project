@@ -1,4 +1,4 @@
 tracepoint:syscalls:sys_enter_finit_module
 {
-    printf("{\"event\": \"kernel_module_load\", \"comm\": \"%s\", \"pid\": %d, \"uid\": %d}\n", comm, pid, uid);
+    printf("{\"e\":\"kml\",\"c\":\"%s\",\"p\":%d,\"u\":%d}\n", comm, pid, uid);
 }

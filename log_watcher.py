@@ -8,7 +8,7 @@ from llama import send_for_analysis
 
 ANSI_ESCAPE_RE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
 
-SERIAL_DEVICES = ["/dev/pts/4", "/dev/pts/5", "/dev/pts/6", "/dev/pts/7"]
+SERIAL_DEVICES = ["/dev/pts/0", "/dev/pts/1", "/dev/pts/2", "/dev/pts/3", "/dev/pts/4", "/dev/pts/5", "/dev/pts/6", "/dev/pts/7", "/dev/pts/8", "/dev/pts/9", "/dev/pts/10", "/dev/pts/11", "/dev/pts/12"]
 HOST_LISTENER_PATH = "virtual_machine/host_listener"
 
 DB_DIR = "vector_db"
@@ -77,9 +77,9 @@ def clear_screen():
 
 def show_header():
     clear_screen()
-    print("╔════════════════════════════════════════════════════════════╗")
-    print("║            CERISE LOG WATCHER - CONTINUOUS ANALYSIS         ║")
-    print("╚════════════════════════════════════════════════════════════╝\n")
+
+    print(" > CERISE <")
+
 
 
 def emit_line(message):

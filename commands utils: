@@ -1,0 +1,9 @@
+commands utils:
+gcc -o vm_controller vm_controller.c - compila o gerenciador de VM
+sudo ./vm_controller - inicia o gerenciador de VM
+sudo cat /dev/pts/X - le a saida do serial
+ssh -p 2222 cerise@127.0.0.1 - ssh
+scp -P 2222 txt.txt cerise@127.0.0.1:~ - envia arquivo para o host
+gcc -o guest_monitor guest_monitor.c -lssl -lcrypto - compilação com a nova lib
+sudo ./host_listener /dev/pts/X - le o novo tunnel
+ sudo venv/bin/python3 log_watcher.py - log_watcher em venv

@@ -7,20 +7,29 @@ import signal
 import socket
 from datetime import datetime, timezone
 from collections import OrderedDict
+import traceback
+from typing import Optional, List, Set
+import threading
+import urllib.request
+
+error_log_file = open("/tmp/supervisor_error.log", "w")
+sys.stderr = error_log_file
 
 try:
     import psutil
-except ImportError:
+except ImportError as e:
+    print(f"Error importing psutil: {e}", file=sys.stderr)
     sys.exit(1)
 
 try:
     from scapy.all import (
         sniff, IP, IPv6, TCP, UDP, ICMP, DNS, DNSQR, DNSRR,
-        Raw, ARP, Ether, conf,
+        Raw, ARP, Ether, conf, get_if_list,
     )
     import logging
     logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
-except ImportError:
+except ImportError as e:
+    print(f"Error importing scapy: {e}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -53,7 +62,7 @@ class ConnectionCache:
         self._cache = new_cache
 
     @staticmethod
-    def _get_process_info(pid: int) -> dict | None:
+    def _get_process_info(pid: int) -> Optional[dict]:
         try:
             proc = psutil.Process(pid)
             with proc.oneshot():
@@ -73,7 +82,7 @@ class ConnectionCache:
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return {"pid": pid}
 
-    def lookup(self, proto_num: int, local_ip: str, local_port: int) -> dict | None:
+    def lookup(self, proto_num: int, local_ip: str, local_port: int) -> Optional[dict]:
         self.refresh()
 
         key = (proto_num, local_ip, local_port)
@@ -90,7 +99,7 @@ class ConnectionCache:
 
         return self._fallback_proc_net(proto_num, local_port)
 
-    def _fallback_proc_net(self, proto_num: int, local_port: int) -> dict | None:
+    def _fallback_proc_net(self, proto_num: int, local_port: int) -> Optional[dict]:
         if proto_num == socket.SOCK_STREAM:
             proc_file = "/proc/net/tcp"
         elif proto_num == socket.SOCK_DGRAM:
@@ -120,7 +129,7 @@ class ConnectionCache:
         return None
 
     @staticmethod
-    def _inode_to_pid(inode: int) -> int | None:
+    def _inode_to_pid(inode: int) -> Optional[int]:
         target = f"socket:[{inode}]"
         for pid_dir in os.listdir("/proc"):
             if not pid_dir.isdigit():
@@ -143,7 +152,7 @@ _conn_cache = ConnectionCache()
 _packet_counter = 0
 
 
-def _resolve_hostname(ip: str) -> str | None:
+def _resolve_hostname(ip: str) -> Optional[str]:
     try:
         hostname, _, _ = socket.gethostbyaddr(ip)
         return hostname
@@ -167,7 +176,7 @@ def _get_protocol_name(proto_num: int) -> str:
     return protocols.get(proto_num, f"PROTO_{proto_num}")
 
 
-def _get_tcp_flags(tcp_layer) -> list[str]:
+def _get_tcp_flags(tcp_layer) -> List[str]:
     flags = []
     flag_map = [
         ("F", "FIN"), ("S", "SYN"), ("R", "RST"), ("P", "PSH"),
@@ -180,7 +189,7 @@ def _get_tcp_flags(tcp_layer) -> list[str]:
     return flags
 
 
-def _extract_dns_info(packet) -> dict | None:
+def _extract_dns_info(packet) -> Optional[dict]:
     if not packet.haslayer(DNS):
         return None
 
@@ -230,7 +239,7 @@ def _extract_dns_info(packet) -> dict | None:
     return dns_info
 
 
-def _extract_http_info(payload_bytes: bytes) -> dict | None:
+def _extract_http_info(payload_bytes: bytes) -> Optional[dict]:
     try:
         text = payload_bytes.decode("utf-8", errors="replace")
     except Exception:
@@ -283,8 +292,14 @@ def _extract_http_info(payload_bytes: bytes) -> dict | None:
 
     return None
 
-
 def process_packet(packet):
+    try:
+        _process_packet_internal(packet)
+    except Exception as e:
+        traceback.print_exc(file=error_log_file)
+        error_log_file.flush()
+
+def _process_packet_internal(packet):
     global _packet_counter
     _packet_counter += 1
 
@@ -346,6 +361,7 @@ def process_packet(packet):
             "payload_length": ip6.plen,
         }
     else:
+        _print_json(result)
         return
 
     src_ip = result["network"]["src_ip"]
@@ -447,11 +463,11 @@ def process_packet(packet):
     _print_json(result)
 
 
-_local_ips_cache: set[str] | None = None
+_local_ips_cache: Optional[Set[str]] = None
 _local_ips_ts: float = 0.0
 
 
-def _get_local_ips() -> set[str]:
+def _get_local_ips() -> Set[str]:
     global _local_ips_cache, _local_ips_ts
     now = time.monotonic()
     if _local_ips_cache is None or now - _local_ips_ts > 10.0:
@@ -469,14 +485,22 @@ def _get_local_ips() -> set[str]:
 
 def _print_json(data: dict):
     try:
-        print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+        print(json.dumps(data, ensure_ascii=False, default=str))
         sys.stdout.flush()
     except (BrokenPipeError, IOError):
         sys.exit(0)
 
 
+def _auto_traffic_generator():
+    time.sleep(2)
+    try:
+        urllib.request.urlopen("http://example.com", timeout=3)
+    except Exception:
+        pass
+
 def main():
     if os.geteuid() != 0:
+        print("Erro: Este script precisa ser executado como root (sudo)!", file=sys.stderr)
         sys.exit(1)
 
     def signal_handler(sig, frame):
@@ -486,13 +510,28 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    print(json.dumps({"event": "startup", "message": "Network packet sniffer is running"}, ensure_ascii=False, default=str))
+    sys.stdout.flush()
+
+    threading.Thread(target=_auto_traffic_generator, daemon=True).start()
+
     try:
-        sniff(
-            prn=process_packet,
-            store=False,
-            iface=None,
-        )
-    except PermissionError:
+        ifaces = get_if_list()
+        if not ifaces:
+            print("Error: No network interfaces found", file=sys.stderr)
+            sys.exit(1)
+
+        print(json.dumps({"event": "info", "message": f"Sniffing on interfaces: {ifaces}"}, ensure_ascii=False, default=str))
+        sys.stdout.flush()
+
+        sniff(iface=ifaces, prn=process_packet, store=False)
+                
+    except PermissionError as e:
+        print(f"Permission error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        traceback.print_exc(file=error_log_file)
+        error_log_file.flush()
         sys.exit(1)
 
 

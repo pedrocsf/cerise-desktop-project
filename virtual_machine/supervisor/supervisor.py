@@ -499,12 +499,7 @@ def _auto_traffic_generator():
         pass
 
 def main():
-    if os.geteuid() != 0:
-        print("Erro: Este script precisa ser executado como root (sudo)!", file=sys.stderr)
-        sys.exit(1)
-
     def signal_handler(sig, frame):
-        print(f"\n[*] Capture ended. Total packets: {_packet_counter}")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)

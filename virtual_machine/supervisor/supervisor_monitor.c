@@ -14,8 +14,27 @@
 #include <sys/select.h>
 #include <time.h>
 
-#define SERIAL_DEVICE_PATH "/dev/vport0p10"
 #define SUPERVISOR_SCRIPT_PATH "./supervisor/supervisor.py"
+#define PORT_PREFIX "/dev/vport0p"
+#define PORT_MIN 1
+#define PORT_MAX 20
+
+int find_available_port(char *out_path, size_t out_size)
+{
+    for (int i = PORT_MIN; i <= PORT_MAX; i++)
+    {
+        char path[128];
+        snprintf(path, sizeof(path), "%s%d", PORT_PREFIX, i);
+        int fd = open(path, O_WRONLY | O_NONBLOCK);
+        if (fd >= 0)
+        {
+            close(fd);
+            snprintf(out_path, out_size, "%s", path);
+            return 0;
+        }
+    }
+    return -1;
+}
 
 static const uint8_t key[] = {'C', 'E', 'R', 'I', 'S', 'E', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const uint8_t iv[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
@@ -235,10 +254,18 @@ int main(void)
     signal(SIGINT, cleanup_handler);
     signal(SIGTERM, cleanup_handler);
 
-    fprintf(stdout, "[supervisor_monitor] Opening serial device %s...\n", SERIAL_DEVICE_PATH);
+    char serial_device_path[128];
+    if (find_available_port(serial_device_path, sizeof(serial_device_path)) < 0)
+    {
+        fprintf(stderr, "[supervisor_monitor] No available serial port found (%s%d - %s%d)\n",
+                PORT_PREFIX, PORT_MIN, PORT_PREFIX, PORT_MAX);
+        exit(EXIT_FAILURE);
+    }
+
+    fprintf(stdout, "[supervisor_monitor] Opening serial device %s...\n", serial_device_path);
     fflush(stdout);
 
-    serial_fd = open(SERIAL_DEVICE_PATH, O_WRONLY | O_NONBLOCK);
+    serial_fd = open(serial_device_path, O_WRONLY | O_NONBLOCK);
     if (serial_fd < 0)
     {
         fprintf(stdout, "[supervisor_monitor] Failed to open serial device: %s\n", strerror(errno));

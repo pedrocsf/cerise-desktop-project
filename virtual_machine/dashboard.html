@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cerise Pipeline Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e17;--surface:rgba(15,23,42,0.85);--border:rgba(0,212,255,0.12);--accent:#00d4ff;--green:#10b981;--red:#ef4444;--amber:#f59e0b;--purple:#a78bfa;--text:#e2e8f0;--muted:#64748b;--card-radius:12px}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);height:100vh;overflow:hidden;display:flex;flex-direction:column}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(100,116,139,0.4);border-radius:3px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 24px;background:rgba(15,23,42,0.95);border-bottom:1px solid var(--border);backdrop-filter:blur(12px);z-index:10;flex-shrink:0}
+.topbar h1{font-size:18px;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stats{display:flex;gap:24px}.stat{text-align:center}.stat-val{font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace}.stat-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}.dot-green{background:var(--green);box-shadow:0 0 8px var(--green)}.dot-red{background:var(--red);box-shadow:0 0 8px var(--red)}.dot-amber{background:var(--amber);box-shadow:0 0 8px var(--amber);animation:pulse 1.5s infinite}
+.main{display:flex;flex:1;overflow:hidden}
+.sidebar{width:280px;border-right:1px solid var(--border);display:flex;flex-direction:column;background:rgba(10,14,23,0.6);flex-shrink:0}
+.sidebar-section{padding:16px;border-bottom:1px solid var(--border)}
+.sidebar-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:12px}
+.port-list{display:flex;flex-direction:column;gap:6px}
+.port-item{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:rgba(30,41,59,0.5);border-radius:6px;font-family:'JetBrains Mono',monospace;font-size:12px}
+.port-count{font-size:11px;color:var(--accent)}
+.batch-list{flex:1;overflow-y:auto;padding:8px}
+.batch-item{padding:10px 12px;border-radius:8px;cursor:pointer;margin-bottom:4px;border:1px solid transparent;transition:all .2s}
+.batch-item:hover{background:rgba(0,212,255,0.05);border-color:var(--border)}.batch-item.active{background:rgba(0,212,255,0.1);border-color:var(--accent)}
+.batch-id{font-weight:600;font-size:13px}.batch-meta{font-size:11px;color:var(--muted);margin-top:2px}.batch-status{font-size:11px;font-weight:500;margin-top:4px}
+.status-complete{color:var(--green)}.status-analyzing{color:var(--amber)}.status-error{color:var(--red)}
+.content{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 16px;flex-shrink:0}
+.tab{padding:12px 20px;font-size:13px;font-weight:500;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:all .2s}
+.tab:hover{color:var(--text)}.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-content{flex:1;overflow-y:auto;padding:16px}.tab-panel{display:none}.tab-panel.active{display:block}
+.card{padding:16px;background:var(--surface);border-radius:var(--card-radius);border:1px solid var(--border);margin-bottom:16px}
+.card h3{font-size:15px;margin-bottom:12px;color:var(--text)}
+.card canvas{width:100%;border-radius:8px}
+.fb-path{font-size:12px;color:var(--muted);margin-bottom:8px;font-family:'JetBrains Mono',monospace}
+.fb-entry{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:13px;transition:background .15s}
+.fb-entry:hover{background:rgba(0,212,255,0.08)}
+.fb-icon{font-size:16px;width:20px;text-align:center;flex-shrink:0}
+.fb-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fb-size{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
+.fb-viewer{margin-top:12px;padding:12px;background:rgba(10,14,23,0.9);border:1px solid var(--border);border-radius:8px;max-height:400px;overflow:auto}
+.fb-viewer pre{font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.6;white-space:pre-wrap;color:var(--text)}
+.fb-viewer-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.fb-close{background:none;border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px}
+.fb-close:hover{color:var(--text);border-color:var(--accent)}
+.fb-list{max-height:300px;overflow-y:auto}
+.dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.dash-kpi{text-align:center;padding:20px}.dash-kpi .kpi-val{font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace}.dash-kpi .kpi-lbl{font-size:12px;color:var(--muted);margin-top:4px}
+.event-line{padding:4px 8px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6;border-left:3px solid transparent}
+.event-line:nth-child(even){background:rgba(30,41,59,0.3)}
+.batch-detail-header{padding:16px;background:var(--surface);border-radius:var(--card-radius);border:1px solid var(--border);margin-bottom:16px}
+.batch-detail-header h3{font-size:16px;margin-bottom:8px}
+.response-box{padding:16px;background:var(--surface);border-radius:var(--card-radius);border:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;white-space:pre-wrap;min-height:100px}
+.events-box{padding:12px;background:var(--surface);border-radius:var(--card-radius);border:1px solid var(--border);margin-bottom:16px;max-height:300px;overflow-y:auto}
+.chat-panel{width:340px;border-left:1px solid var(--border);display:flex;flex-direction:column;background:rgba(10,14,23,0.6);flex-shrink:0}
+.chat-header{padding:16px;border-bottom:1px solid var(--border);font-weight:600;font-size:14px}
+.chat-messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+.chat-msg{padding:10px 12px;border-radius:10px;font-size:13px;line-height:1.5;max-width:90%;white-space:pre-wrap}
+.chat-msg.user{background:rgba(0,212,255,0.15);align-self:flex-end;border:1px solid rgba(0,212,255,0.2)}
+.chat-msg.bot{background:rgba(30,41,59,0.6);align-self:flex-start;border:1px solid var(--border);font-family:'JetBrains Mono',monospace;font-size:12px}
+.chat-input-area{padding:12px;border-top:1px solid var(--border);display:flex;gap:8px}
+.chat-input-area textarea{flex:1;background:rgba(30,41,59,0.6);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text);font-family:'Inter',sans-serif;font-size:13px;resize:none;outline:none;min-height:40px;max-height:100px}
+.chat-input-area textarea:focus{border-color:var(--accent)}
+.chat-input-area button{background:linear-gradient(135deg,var(--accent),#6366f1);border:none;border-radius:8px;padding:10px 16px;color:#fff;font-weight:600;cursor:pointer;font-size:13px;transition:opacity .2s;white-space:nowrap}
+.chat-input-area button:hover{opacity:.85}.chat-input-area button:disabled{opacity:.4;cursor:not-allowed}
+.progress-bar{height:4px;background:rgba(30,41,59,0.6);border-radius:2px;overflow:hidden;margin-top:8px}
+.progress-bar-inner{height:100%;background:linear-gradient(90deg,var(--accent),var(--purple));border-radius:2px;animation:progressPulse 2s ease-in-out infinite;width:100%}
+.progress-info{font-size:11px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--muted);gap:8px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes progressPulse{0%{opacity:.6;transform:translateX(-100%)}50%{opacity:1}100%{opacity:.6;transform:translateX(100%)}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>⬡ CERISE PIPELINE</h1>
+  <div class="stats">
+    <div class="stat"><div class="stat-val" id="stat-events">0</div><div class="stat-lbl">Events</div></div>
+    <div class="stat"><div class="stat-val" id="stat-batches">0</div><div class="stat-lbl">Batches</div></div>
+    <div class="stat"><div class="stat-val" id="stat-uptime">0s</div><div class="stat-lbl">Uptime</div></div>
+    <div class="stat"><span class="dot dot-red" id="ollama-dot"></span><span id="ollama-status" style="font-size:13px">Connecting...</span></div>
+  </div>
+</div>
+<div class="main">
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">Listener Status</div>
+      <div style="display:flex;gap:12px;margin-bottom:10px">
+        <div style="font-size:12px"><span class="dot dot-red" id="host-dot"></span>eBPF</div>
+        <div style="font-size:12px"><span class="dot dot-red" id="supervisor-dot"></span>Network</div>
+      </div>
+      <div class="port-list" id="port-list"><div style="font-size:12px;color:var(--muted)">Loading...</div></div>
+    </div>
+    <div class="sidebar-section" style="flex-shrink:0">
+      <div class="sidebar-title">Batch History</div>
+      <div id="analysis-progress" style="display:none"><div class="progress-bar"><div class="progress-bar-inner"></div></div><div class="progress-info" id="analysis-progress-info">Analyzing...</div></div>
+    </div>
+    <div class="batch-list" id="batch-list"><div class="empty-state" style="padding:24px"><span style="font-size:13px">No batches yet</span></div></div>
+  </div>
+  <div class="content">
+    <div class="tabs">
+      <div class="tab active" data-tab="overview">Dashboard</div>
+      <div class="tab" data-tab="detail">Batch Detail</div>
+    </div>
+    <div class="tab-content">
+      <div class="tab-panel active" id="panel-overview">
+        <div class="dash-grid">
+          <div class="card dash-kpi"><div class="kpi-val" style="color:var(--accent)" id="kpi-events">0</div><div class="kpi-lbl">Total Events</div></div>
+          <div class="card dash-kpi"><div class="kpi-val" style="color:var(--green)" id="kpi-rate">0</div><div class="kpi-lbl">Events / min</div></div>
+          <div class="card dash-kpi"><div class="kpi-val" style="color:var(--purple)" id="kpi-batches">0</div><div class="kpi-lbl">Batches Analyzed</div></div>
+          <div class="card dash-kpi"><div class="kpi-val" style="color:var(--amber)" id="kpi-pending">0</div><div class="kpi-lbl">Current Batch Size</div></div>
+        </div>
+        <div class="dash-grid">
+          <div class="card"><h3>📊 Events Over Time</h3><canvas id="chart-timeline" height="180"></canvas></div>
+          <div class="card"><h3>📡 Events by Source</h3><canvas id="chart-sources" height="180"></canvas></div>
+        </div>
+        <div class="card"><h3>📂 Project Files</h3><div class="fb-path" id="fb-path">/</div><div class="fb-list" id="fb-list"></div><div id="fb-viewer-wrap"></div></div>
+      </div>
+      <div class="tab-panel" id="panel-detail">
+        <div id="detail-container"><div class="empty-state"><span style="font-size:14px">Select a batch from the sidebar</span></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="chat-panel">
+    <div class="chat-header">💬 Chat with Llama
+      <div id="chat-progress" style="display:none"><div class="progress-bar"><div class="progress-bar-inner"></div></div><div class="progress-info" id="chat-progress-info">Thinking...</div></div>
+    </div>
+    <div class="chat-messages" id="chat-messages"><div class="chat-msg bot">Hello! Ask me anything about collected data or security topics.</div></div>
+    <div class="chat-input-area">
+      <textarea id="chat-input" placeholder="Ask a question..." rows="1"></textarea>
+      <button id="chat-send">Send</button>
+    </div>
+  </div>
+</div>
+<script>
+const batchListEl=document.getElementById('batch-list'),detailContainer=document.getElementById('detail-container');
+const chatMessages=document.getElementById('chat-messages'),chatInput=document.getElementById('chat-input'),chatSend=document.getElementById('chat-send');
+let activeBatchId=null,currentChatBotMsg=null,batches=[];
+let eventTimeline=[],ebpfCount=0,networkCount=0,portCounts={};
+
+function formatTime(s){const m=Math.floor(s/60),h=Math.floor(m/60);return h>0?`${h}h${m%60}m`:m>0?`${m}m${s%60}s`:`${s}s`}
+function timeAgo(ts){const d=Math.floor(Date.now()/1000-ts);return d<60?`${d}s ago`:d<3600?`${Math.floor(d/60)}m ago`:`${Math.floor(d/3600)}h ago`}
+function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function switchTab(n){document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===n));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===`panel-${n}`))}
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>switchTab(t.dataset.tab)));
+
+function drawTimeline(){
+  const c=document.getElementById('chart-timeline'),ctx=c.getContext('2d');
+  c.width=c.offsetWidth*2;c.height=360;ctx.scale(2,2);
+  const w=c.offsetWidth,h=180;ctx.clearRect(0,0,w,h);
+  if(eventTimeline.length<2)return;
+  const buckets=[];const now=Date.now()/1000;const span=300;const bSize=10;const bCount=Math.ceil(span/bSize);
+  for(let i=0;i<bCount;i++)buckets.push(0);
+  eventTimeline.forEach(t=>{const age=now-t;if(age<span){const idx=Math.min(bCount-1,Math.floor((span-age)/bSize));buckets[idx]++}});
+  const max=Math.max(...buckets,1);
+  const bw=(w-40)/bCount;
+  ctx.fillStyle='rgba(0,212,255,0.15)';ctx.strokeStyle='rgba(0,212,255,0.6)';ctx.lineWidth=1.5;
+  ctx.beginPath();
+  buckets.forEach((v,i)=>{const x=20+i*bw+bw/2,y=h-20-(v/max)*(h-40);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y)});
+  ctx.stroke();
+  ctx.lineTo(20+(bCount-1)*bw+bw/2,h-20);ctx.lineTo(20+bw/2,h-20);ctx.closePath();ctx.fill();
+  ctx.fillStyle='var(--muted)';ctx.font='10px Inter';ctx.fillText('5m ago',20,h-6);ctx.fillText('now',w-30,h-6);
+}
+
+function drawSources(){
+  const c=document.getElementById('chart-sources'),ctx=c.getContext('2d');
+  c.width=c.offsetWidth*2;c.height=360;ctx.scale(2,2);
+  const w=c.offsetWidth,h=180,cx=w/2,cy=h/2-5,r=60;
+  ctx.clearRect(0,0,w,h);
+  const total=ebpfCount+networkCount;if(total===0)return;
+  const slices=[{v:ebpfCount,c:'#10b981',l:'eBPF'},{v:networkCount,c:'#00d4ff',l:'Network'}];
+  let angle=-Math.PI/2;
+  slices.forEach(s=>{const a=s.v/total*Math.PI*2;ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,r,angle,angle+a);ctx.fillStyle=s.c;ctx.fill();angle+=a});
+  ctx.fillStyle='var(--bg)';ctx.beginPath();ctx.arc(cx,cy,35,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='var(--text)';ctx.font='bold 14px JetBrains Mono';ctx.textAlign='center';ctx.fillText(total,cx,cy+5);
+  let ly=h-20;
+  slices.forEach(s=>{ctx.fillStyle=s.c;ctx.fillRect(cx-60,ly-8,10,10);ctx.fillStyle='var(--text)';ctx.font='11px Inter';ctx.textAlign='left';ctx.fillText(`${s.l}: ${s.v}`,cx-44,ly);ly+=16});
+}
+
+function loadDir(path){
+  fetch(`/api/files?path=${encodeURIComponent(path)}`).then(r=>r.json()).then(d=>{
+    if(d.error)return;
+    document.getElementById('fb-path').textContent=d.path||'/';
+    document.getElementById('fb-viewer-wrap').innerHTML='';
+    const list=document.getElementById('fb-list');
+    let html='';
+    if(d.path){html+=`<div class="fb-entry" onclick="loadDir('${d.path.split('/').slice(0,-1).join('/')}')" ><span class="fb-icon">⬆</span><span class="fb-name">..</span><span class="fb-size"></span></div>`}
+    d.entries.forEach(e=>{
+      if(e.is_dir){html+=`<div class="fb-entry" onclick="loadDir('${e.path}')"><span class="fb-icon">📁</span><span class="fb-name">${e.name}</span><span class="fb-size"></span></div>`}
+      else{const sz=e.size>1024?(e.size/1024).toFixed(1)+'K':e.size+'B';html+=`<div class="fb-entry" onclick="openFile('${e.path}')"><span class="fb-icon">📄</span><span class="fb-name">${e.name}</span><span class="fb-size">${sz}</span></div>`}
+    });
+    list.innerHTML=html;
+  });
+}
+function openFile(path){
+  fetch(`/api/file?path=${encodeURIComponent(path)}`).then(r=>r.json()).then(d=>{
+    if(d.error){alert(d.error);return}
+    document.getElementById('fb-viewer-wrap').innerHTML=`<div class="fb-viewer"><div class="fb-viewer-header"><span style="font-size:12px;font-weight:600;color:var(--accent)">${d.name}</span><button class="fb-close" onclick="this.closest('.fb-viewer').remove()">✕</button></div><pre>${escapeHtml(d.content)}</pre></div>`;
+  });
+}
+loadDir('');
+
+function updateStatus(s){
+  document.getElementById('stat-events').textContent=s.total_events;
+  document.getElementById('stat-batches').textContent=s.batch_count;
+  document.getElementById('stat-uptime').textContent=formatTime(s.uptime);
+  document.getElementById('host-dot').className=`dot ${s.host_running?'dot-green':'dot-red'}`;
+  document.getElementById('supervisor-dot').className=`dot ${s.supervisor_running?'dot-green':'dot-red'}`;
+  document.getElementById('ollama-dot').className='dot dot-green';
+  document.getElementById('ollama-status').textContent='Ollama OK';
+  if(s.ports&&s.ports.length){
+    const pl=document.getElementById('port-list');
+    const epp=s.events_per_port||{};
+    pl.innerHTML=Object.keys(epp).map(k=>{return`<div class="port-item"><span>${k.replace('/dev/','')}</span><span class="port-count">${epp[k]}</span></div>`}).join('');
+  }
+  const ap=document.getElementById('analysis-progress');
+  if(s.analysis_busy){ap.style.display='block';document.getElementById('analysis-progress-info').textContent=`Analyzing... ${s.analysis_tokens} tokens · ${s.analysis_elapsed}s`}else{ap.style.display='none'}
+  const cp=document.getElementById('chat-progress');
+  if(s.chat_busy){cp.style.display='block';document.getElementById('chat-progress-info').textContent=`Thinking... ${s.chat_tokens} tokens · ${s.chat_elapsed}s`}else{cp.style.display='none'}
+  document.getElementById('kpi-events').textContent=s.total_events;
+  document.getElementById('kpi-batches').textContent=s.batch_count;
+  document.getElementById('kpi-pending').textContent=s.current_batch_size;
+  const rate=s.uptime>0?Math.round(s.total_events/(s.uptime/60)):0;
+  document.getElementById('kpi-rate').textContent=rate;
+  ebpfCount=s.ebpf_count||0;networkCount=s.network_count||0;
+  drawTimeline();drawSources();
+}
+
+function renderBatchList(){
+  if(!batches.length){batchListEl.innerHTML='<div class="empty-state" style="padding:24px"><span style="font-size:13px">No batches yet</span></div>';return}
+  batchListEl.innerHTML=batches.map(b=>{
+    const sc=b.status==='complete'?'status-complete':b.status==='analyzing'?'status-analyzing':'status-error';
+    const ic=b.status==='complete'?'✓':b.status==='analyzing'?'⟳':'✗';
+    return`<div class="batch-item ${b.id===activeBatchId?'active':''}" onclick="selectBatch(${b.id})"><div class="batch-id">Batch #${b.id}</div><div class="batch-meta">${b.event_count} events · ${timeAgo(b.timestamp)}</div><div class="batch-status ${sc}">${ic} ${b.status}${b.duration?' · '+b.duration+'s':''}</div></div>`
+  }).join('');
+}
+
+function selectBatch(id){
+  activeBatchId=id;renderBatchList();switchTab('detail');
+  fetch(`/api/batch/${id}`).then(r=>r.json()).then(b=>{
+    let ev=b.events.slice(-50).map(e=>`<div class="event-line" style="font-size:11px">${escapeHtml(e)}</div>`).join('');
+    detailContainer.innerHTML=`<div class="batch-detail-header"><h3>Batch #${b.id}</h3><div style="font-size:12px;color:var(--muted)">${b.event_count} events · Status: ${b.status} · Duration: ${b.duration||0}s · Tokens: ${b.tokens||0}</div></div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">EVENTS (last 50)</div><div class="events-box">${ev}</div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">ANALYSIS RESPONSE</div><div class="response-box" id="batch-response-${b.id}">${b.response?escapeHtml(b.response):'<span style="color:var(--muted)">Waiting for analysis...</span>'}</div>`;
+  });
+}
+
+chatSend.addEventListener('click',sendChat);
+chatInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
+function sendChat(){
+  const msg=chatInput.value.trim();if(!msg)return;chatInput.value='';
+  const u=document.createElement('div');u.className='chat-msg user';u.textContent=msg;chatMessages.appendChild(u);
+  currentChatBotMsg=document.createElement('div');currentChatBotMsg.className='chat-msg bot';currentChatBotMsg.textContent='';chatMessages.appendChild(currentChatBotMsg);
+  chatMessages.scrollTop=chatMessages.scrollHeight;chatSend.disabled=true;
+  fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
+}
+
+const evtSource=new EventSource('/api/stream');
+evtSource.addEventListener('event',e=>{
+  const d=JSON.parse(e.data);
+  eventTimeline.push(d.timestamp);if(eventTimeline.length>1000)eventTimeline.shift();
+  if(d.source==='ebpf')ebpfCount++;else if(d.source==='network')networkCount++;
+});
+evtSource.addEventListener('batch_created',e=>{batches.push(JSON.parse(e.data));renderBatchList()});
+evtSource.addEventListener('analysis_token',e=>{
+  const d=JSON.parse(e.data);
+  if(activeBatchId===d.batch_id){const el=document.getElementById(`batch-response-${d.batch_id}`);if(el){if(el.querySelector('span'))el.innerHTML='';el.textContent+=d.token}}
+});
+evtSource.addEventListener('analysis_done',e=>{
+  const d=JSON.parse(e.data);const idx=batches.findIndex(b=>b.id===d.batch_id);
+  if(idx>=0){batches[idx].status=d.status;batches[idx].duration=d.duration;batches[idx].tokens=d.tokens}renderBatchList();
+});
+evtSource.addEventListener('analysis_start',()=>{});
+evtSource.addEventListener('chat_token',e=>{const d=JSON.parse(e.data);if(currentChatBotMsg)currentChatBotMsg.textContent+=d.token;chatMessages.scrollTop=chatMessages.scrollHeight});
+evtSource.addEventListener('chat_done',()=>{chatSend.disabled=false;currentChatBotMsg=null});
+
+setInterval(()=>{fetch('/api/status').then(r=>r.json()).then(updateStatus).catch(()=>{document.getElementById('ollama-dot').className='dot dot-red';document.getElementById('ollama-status').textContent='Disconnected'})},2000);
+fetch('/api/batches').then(r=>r.json()).then(l=>{batches=l;renderBatchList()});
+</script>
+</body>
+</html>

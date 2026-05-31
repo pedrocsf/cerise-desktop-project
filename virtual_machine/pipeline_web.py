@@ -1,0 +1,571 @@
+#!/usr/bin/env python3
+import http.server
+import json
+import subprocess
+import threading
+import time
+import os
+import sys
+import urllib.request
+import urllib.error
+import socketserver
+import pathlib
+
+SERIAL_PORTS_FILE = "serial_ports.list"
+BATCH_INTERVAL = 30
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "llama2"
+WEB_HOST = "0.0.0.0"
+WEB_PORT = 8080
+
+ANALYSIS_PROMPT = (
+    "### Instruction:\n"
+    "You are a malware analyst. Analyze the following data collected from a sandboxed virtual machine.\n"
+    "The data includes kernel-level syscall traces (from eBPF) and network request logs.\n"
+    "Identify suspicious behaviors, potential malware indicators, and describe what the malware appears to be doing.\n"
+    "Output ONLY the analysis result in plain text.\n"
+    "Do NOT output any timestamps, debug logs, or simulate system output.\n"
+    "\n### Input:\n{data}\n\n### Response:\n"
+)
+
+
+class PipelineState:
+    def __init__(self):
+        self.ports = []
+        self.host_ports = []
+        self.supervisor_ports = []
+        self.host_proc = None
+        self.supervisor_procs = []
+        self.host_running = False
+        self.supervisor_running_count = 0
+        self.events = []
+        self.current_batch = []
+        self.batches = []
+        self.batch_counter = 0
+        self.sse_clients = {}
+        self.lock = threading.Lock()
+        self.analysis_busy = False
+        self.analysis_tokens = 0
+        self.analysis_start_time = 0
+        self.chat_busy = False
+        self.chat_tokens = 0
+        self.chat_start_time = 0
+        self.start_time = time.time()
+        self.total_events = 0
+        self.last_event_time = None
+        self.events_per_port = {}
+        self.ebpf_count = 0
+        self.network_count = 0
+
+    def get_status(self):
+        with self.lock:
+            return {
+                "host_running": self.host_running,
+                "supervisor_running": self.supervisor_running_count > 0,
+                "ports": self.ports,
+                "host_ports": self.host_ports,
+                "supervisor_ports": self.supervisor_ports,
+                "total_events": self.total_events,
+                "current_batch_size": len(self.current_batch),
+                "batch_count": self.batch_counter,
+                "uptime": int(time.time() - self.start_time),
+                "last_event_time": self.last_event_time,
+                "analysis_busy": self.analysis_busy,
+                "analysis_tokens": self.analysis_tokens,
+                "analysis_elapsed": round(time.time() - self.analysis_start_time, 1) if self.analysis_busy else 0,
+                "chat_busy": self.chat_busy,
+                "chat_tokens": self.chat_tokens,
+                "chat_elapsed": round(time.time() - self.chat_start_time, 1) if self.chat_busy else 0,
+                "events_per_port": dict(self.events_per_port),
+                "ebpf_count": self.ebpf_count,
+                "network_count": self.network_count,
+                "batch_interval": BATCH_INTERVAL,
+            }
+
+
+state = PipelineState()
+
+
+def load_ports():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    ports_path = os.path.join(script_dir, SERIAL_PORTS_FILE)
+    if not os.path.exists(ports_path):
+        print(f"[pipeline_web] Error: {ports_path} not found. Start VM via vm_controller first.")
+        sys.exit(1)
+    entries = []
+    with open(ports_path, "r") as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) == 2:
+                entries.append((parts[0], parts[1]))
+    if not entries:
+        print("[pipeline_web] Error: No ports found in serial_ports.list")
+        sys.exit(1)
+    return entries
+
+
+def spawn_process(binary_name, ports):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    binary_path = os.path.join(script_dir, binary_name)
+    if not os.path.exists(binary_path):
+        print(f"[pipeline_web] Warning: {binary_path} not found, skipping")
+        return None
+    cmd = [binary_path] + ports
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    return proc
+
+
+def broadcast_sse(event_type, data):
+    message = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+    encoded = message.encode("utf-8")
+    dead_clients = []
+    with state.lock:
+        for cid, wfile in state.sse_clients.items():
+            try:
+                wfile.write(encoded)
+                wfile.flush()
+            except Exception:
+                dead_clients.append(cid)
+        for cid in dead_clients:
+            del state.sse_clients[cid]
+
+
+def _is_network_event(text):
+    """Detect supervisor.py/scapy network events by content fingerprint."""
+    return '"packet_number"' in text or '"ethernet"' in text
+
+
+def reader_thread(proc, source_label, is_supervisor=False):
+    for raw_line in iter(proc.stdout.readline, b""):
+        try:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+        except Exception:
+            continue
+        if not line:
+            continue
+
+        port_tag = None
+        display_line = line
+        if line.startswith("[") and "]" in line:
+            bracket_end = line.index("]")
+            port_tag = line[1:bracket_end]
+            display_line = line[bracket_end + 2:]
+
+        # Classify by content: network packets from scapy always have "packet_number"
+        effective_source = "network" if _is_network_event(display_line) else source_label
+        tag = f"{effective_source}:{port_tag}" if port_tag else effective_source
+
+        with state.lock:
+            state.total_events += 1
+            state.last_event_time = time.time()
+            state.current_batch.append(f"[{tag}] {display_line}")
+            state.events.append({
+                "id": state.total_events,
+                "timestamp": time.time(),
+                "port": tag,
+                "source": effective_source,
+                "data": display_line
+            })
+            state.events_per_port[tag] = state.events_per_port.get(tag, 0) + 1
+            if effective_source == "network":
+                state.network_count += 1
+            else:
+                state.ebpf_count += 1
+
+        broadcast_sse("event", {
+            "id": state.total_events,
+            "timestamp": time.time(),
+            "port": tag,
+            "source": effective_source,
+            "data": display_line[:500]
+        })
+
+    with state.lock:
+        if is_supervisor:
+            state.supervisor_running_count = max(0, state.supervisor_running_count - 1)
+            still_running = state.supervisor_running_count > 0
+        else:
+            state.host_running = False
+            still_running = False
+    broadcast_sse("listener_status", {"source": source_label, "running": still_running})
+
+
+def send_to_ollama_streaming(prompt, on_token, on_done):
+    data = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": True,
+        "options": {"temperature": 0.0}
+    }
+    try:
+        json_data = json.dumps(data).encode("utf-8")
+        req = urllib.request.Request(
+            OLLAMA_URL,
+            data=json_data,
+            headers={"Content-Type": "application/json"}
+        )
+        full_response = []
+        with urllib.request.urlopen(req, timeout=300) as response:
+            for raw_line in response:
+                try:
+                    chunk = json.loads(raw_line.decode("utf-8"))
+                except Exception:
+                    continue
+                token = chunk.get("response", "")
+                if token:
+                    full_response.append(token)
+                    on_token(token)
+                if chunk.get("done", False):
+                    break
+        final_text = "".join(full_response)
+        on_done(final_text, None)
+    except Exception as e:
+        on_done(None, str(e))
+
+
+def batch_timer_thread():
+    while (state.host_running or state.supervisor_running_count > 0) or (state.host_proc is None and not state.supervisor_procs):
+        time.sleep(1)
+        if not state.host_running and state.supervisor_running_count <= 0 and (state.host_proc is not None or state.supervisor_procs):
+            break
+
+        elapsed = time.time() - (state.batches[-1]["timestamp"] if state.batches else state.start_time)
+        if elapsed < BATCH_INTERVAL:
+            continue
+
+        with state.lock:
+            if not state.current_batch:
+                continue
+            state.batch_counter += 1
+            batch = {
+                "id": state.batch_counter,
+                "timestamp": time.time(),
+                "events": list(state.current_batch),
+                "event_count": len(state.current_batch),
+                "response": "",
+                "status": "analyzing",
+                "tokens": 0,
+                "duration": 0,
+            }
+            state.batches.append(batch)
+            state.current_batch = []
+
+        broadcast_sse("batch_created", {
+            "id": batch["id"],
+            "timestamp": batch["timestamp"],
+            "event_count": batch["event_count"],
+            "status": "analyzing"
+        })
+
+        analysis_thread = threading.Thread(target=run_analysis, args=(batch,), daemon=True)
+        analysis_thread.start()
+
+
+def run_analysis(batch):
+    batch_data = "\n".join(batch["events"][-100:])
+    prompt = ANALYSIS_PROMPT.format(data=batch_data)
+
+    with state.lock:
+        state.analysis_busy = True
+        state.analysis_tokens = 0
+        state.analysis_start_time = time.time()
+
+    broadcast_sse("analysis_start", {"batch_id": batch["id"]})
+
+    def on_token(token):
+        with state.lock:
+            state.analysis_tokens += 1
+            batch["tokens"] = state.analysis_tokens
+        broadcast_sse("analysis_token", {
+            "batch_id": batch["id"],
+            "token": token,
+            "token_count": state.analysis_tokens,
+            "elapsed": round(time.time() - state.analysis_start_time, 1)
+        })
+
+    def on_done(text, error):
+        with state.lock:
+            state.analysis_busy = False
+            duration = round(time.time() - state.analysis_start_time, 1)
+            if text:
+                batch["response"] = text
+                batch["status"] = "complete"
+            else:
+                batch["response"] = f"Error: {error}"
+                batch["status"] = "error"
+            batch["duration"] = duration
+
+        broadcast_sse("analysis_done", {
+            "batch_id": batch["id"],
+            "status": batch["status"],
+            "duration": duration,
+            "tokens": batch["tokens"]
+        })
+
+    send_to_ollama_streaming(prompt, on_token, on_done)
+
+
+def run_chat(message):
+    with state.lock:
+        state.chat_busy = True
+        state.chat_tokens = 0
+        state.chat_start_time = time.time()
+
+    broadcast_sse("chat_start", {})
+
+    def on_token(token):
+        with state.lock:
+            state.chat_tokens += 1
+        broadcast_sse("chat_token", {
+            "token": token,
+            "token_count": state.chat_tokens,
+            "elapsed": round(time.time() - state.chat_start_time, 1)
+        })
+
+    def on_done(text, error):
+        with state.lock:
+            state.chat_busy = False
+        broadcast_sse("chat_done", {
+            "response": text if text else f"Error: {error}",
+            "duration": round(time.time() - state.chat_start_time, 1),
+            "tokens": state.chat_tokens
+        })
+
+    send_to_ollama_streaming(message, on_token, on_done)
+
+
+class DashboardHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def send_json(self, data, status=200):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", len(body))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/":
+            self.serve_dashboard()
+        elif self.path == "/api/status":
+            self.send_json(state.get_status())
+        elif self.path == "/api/batches":
+            with state.lock:
+                batch_list = [{
+                    "id": b["id"],
+                    "timestamp": b["timestamp"],
+                    "event_count": b["event_count"],
+                    "status": b["status"],
+                    "duration": b.get("duration", 0),
+                    "tokens": b.get("tokens", 0),
+                } for b in state.batches]
+            self.send_json(batch_list)
+        elif self.path.startswith("/api/batch/"):
+            try:
+                batch_id = int(self.path.split("/")[-1])
+            except ValueError:
+                self.send_json({"error": "Invalid batch ID"}, 400)
+                return
+            with state.lock:
+                batch = next((b for b in state.batches if b["id"] == batch_id), None)
+            if batch:
+                self.send_json(batch)
+            else:
+                self.send_json({"error": "Batch not found"}, 404)
+        elif self.path == "/api/stream":
+            self.handle_sse()
+        elif self.path.startswith("/api/files"):
+            self.handle_files()
+        elif self.path.startswith("/api/file?"):
+            self.handle_file_content()
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if self.path == "/api/chat":
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len)
+            try:
+                data = json.loads(body)
+                message = data.get("message", "").strip()
+            except Exception:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            if not message:
+                self.send_json({"error": "Empty message"}, 400)
+                return
+            if state.chat_busy:
+                self.send_json({"error": "Chat is busy"}, 429)
+                return
+            chat_thread = threading.Thread(target=run_chat, args=(message,), daemon=True)
+            chat_thread.start()
+            self.send_json({"status": "started"})
+        else:
+            self.send_error(404)
+    def _project_root(self):
+        return str(pathlib.Path(os.path.dirname(os.path.abspath(__file__))).parent)
+
+    def handle_files(self):
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        rel_path = params.get("path", [""])[0]
+        root = self._project_root()
+        target = os.path.normpath(os.path.join(root, rel_path))
+        if not target.startswith(root):
+            self.send_json({"error": "Access denied"}, 403)
+            return
+        if not os.path.exists(target):
+            self.send_json({"error": "Not found"}, 404)
+            return
+        if os.path.isfile(target):
+            self.send_json({"type": "file", "path": rel_path, "name": os.path.basename(target), "size": os.path.getsize(target)})
+            return
+        entries = []
+        try:
+            for entry in sorted(os.listdir(target)):
+                if entry.startswith('.'):
+                    continue
+                full = os.path.join(target, entry)
+                e_rel = os.path.relpath(full, root)
+                is_dir = os.path.isdir(full)
+                entries.append({"name": entry, "path": e_rel, "is_dir": is_dir, "size": os.path.getsize(full) if not is_dir else 0})
+        except PermissionError:
+            pass
+        entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+        self.send_json({"type": "directory", "path": rel_path, "entries": entries})
+
+    def handle_file_content(self):
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        rel_path = params.get("path", [""])[0]
+        root = self._project_root()
+        target = os.path.normpath(os.path.join(root, rel_path))
+        if not target.startswith(root):
+            self.send_json({"error": "Access denied"}, 403)
+            return
+        if not os.path.isfile(target):
+            self.send_json({"error": "Not found"}, 404)
+            return
+        try:
+            size = os.path.getsize(target)
+            if size > 500000:
+                self.send_json({"error": "File too large", "size": size}, 400)
+                return
+            with open(target, "r", errors="replace") as f:
+                content = f.read()
+            self.send_json({"path": rel_path, "name": os.path.basename(target), "content": content, "size": size})
+        except Exception as e:
+            self.send_json({"error": str(e)}, 500)
+
+    def serve_dashboard(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        html_path = os.path.join(script_dir, "dashboard.html")
+        try:
+            with open(html_path, "rb") as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", len(content))
+            self.end_headers()
+            self.wfile.write(content)
+        except FileNotFoundError:
+            self.send_error(500, "dashboard.html not found")
+
+    def handle_sse(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        client_id = id(threading.current_thread())
+        with state.lock:
+            state.sse_clients[client_id] = self.wfile
+
+        try:
+            while True:
+                time.sleep(15)
+                self.wfile.write(b": keepalive\n\n")
+                self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            with state.lock:
+                state.sse_clients.pop(client_id, None)
+
+
+class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def main():
+    print("[pipeline_web] Starting Cerise Pipeline Web Dashboard...")
+
+    entries = load_ports()
+    state.ports = [path for _, path in entries]
+
+    for label, path in entries:
+        num = int("".join(filter(str.isdigit, label)) or "0")
+        if num >= 10:
+            state.supervisor_ports.append(path)
+        else:
+            state.host_ports.append(path)
+
+    print(f"[pipeline_web] Host (eBPF) ports ({len(state.host_ports)}):")
+    for p in state.host_ports:
+        print(f"  {p}")
+    print(f"[pipeline_web] Supervisor (network) ports ({len(state.supervisor_ports)}):")
+    for p in state.supervisor_ports:
+        print(f"  {p}")
+
+    if state.host_ports:
+        state.host_proc = spawn_process("host_listener", state.host_ports)
+        if state.host_proc:
+            state.host_running = True
+            print(f"[pipeline_web] host_listener spawned (PID {state.host_proc.pid})")
+            threading.Thread(target=reader_thread, args=(state.host_proc, "ebpf", False), daemon=True).start()
+
+    if state.supervisor_ports:
+        for sp in state.supervisor_ports:
+            proc = spawn_process("supervisor_listener", [sp])
+            if proc:
+                state.supervisor_procs.append(proc)
+                state.supervisor_running_count += 1
+                print(f"[pipeline_web] supervisor_listener spawned on {sp} (PID {proc.pid})")
+                threading.Thread(target=reader_thread, args=(proc, "network", True), daemon=True).start()
+
+    threading.Thread(target=batch_timer_thread, daemon=True).start()
+
+    server = ThreadedHTTPServer((WEB_HOST, WEB_PORT), DashboardHandler)
+    print(f"[pipeline_web] Dashboard available at http://localhost:{WEB_PORT}")
+    print(f"[pipeline_web] Batch interval: {BATCH_INTERVAL}s")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[pipeline_web] Shutting down...")
+        all_procs = [state.host_proc] + state.supervisor_procs
+        for proc in all_procs:
+            if proc:
+                proc.terminate()
+                proc.wait()
+        server.shutdown()
+        print("[pipeline_web] Done.")
+
+
+if __name__ == "__main__":
+    main()

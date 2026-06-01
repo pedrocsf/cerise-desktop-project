@@ -3,6 +3,7 @@ import http.server
 import json
 import subprocess
 import threading
+import queue
 import time
 import os
 import sys
@@ -205,7 +206,7 @@ def send_to_ollama_streaming(prompt, on_token, on_done):
             headers={"Content-Type": "application/json"}
         )
         full_response = []
-        with urllib.request.urlopen(req, timeout=300) as response:
+        with urllib.request.urlopen(req) as response:
             for raw_line in response:
                 try:
                     chunk = json.loads(raw_line.decode("utf-8"))
@@ -220,7 +221,24 @@ def send_to_ollama_streaming(prompt, on_token, on_done):
         final_text = "".join(full_response)
         on_done(final_text, None)
     except Exception as e:
+        print(f"[pipeline_web] Ollama error: {e}", flush=True)
         on_done(None, str(e))
+
+
+analysis_queue = queue.Queue()
+
+
+def analysis_worker_thread():
+    """Dedicated worker that processes analysis batches one at a time."""
+    while True:
+        batch = analysis_queue.get()
+        if batch is None:
+            break
+        try:
+            run_analysis(batch)
+        except Exception as e:
+            print(f"[pipeline_web] Analysis worker error: {e}", flush=True)
+        analysis_queue.task_done()
 
 
 def batch_timer_thread():
@@ -243,7 +261,7 @@ def batch_timer_thread():
                 "events": list(state.current_batch),
                 "event_count": len(state.current_batch),
                 "response": "",
-                "status": "analyzing",
+                "status": "queued",
                 "tokens": 0,
                 "duration": 0,
             }
@@ -254,11 +272,10 @@ def batch_timer_thread():
             "id": batch["id"],
             "timestamp": batch["timestamp"],
             "event_count": batch["event_count"],
-            "status": "analyzing"
+            "status": "queued"
         })
 
-        analysis_thread = threading.Thread(target=run_analysis, args=(batch,), daemon=True)
-        analysis_thread.start()
+        analysis_queue.put(batch)
 
 
 def run_analysis(batch):
@@ -269,6 +286,7 @@ def run_analysis(batch):
         state.analysis_busy = True
         state.analysis_tokens = 0
         state.analysis_start_time = time.time()
+        batch["status"] = "analyzing"
 
     broadcast_sse("analysis_start", {"batch_id": batch["id"]})
 
@@ -388,6 +406,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.handle_files()
         elif self.path.startswith("/api/file?"):
             self.handle_file_content()
+        elif self.path.endswith(".png"):
+            self.serve_static_png()
         else:
             self.send_error(404)
 
@@ -483,6 +503,24 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         except FileNotFoundError:
             self.send_error(500, "dashboard.html not found")
 
+    def serve_static_png(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        filename = os.path.basename(self.path)
+        png_path = os.path.abspath(os.path.join(script_dir, filename))
+        if not png_path.startswith(script_dir) or not os.path.exists(png_path):
+            self.send_error(404)
+            return
+        try:
+            with open(png_path, "rb") as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", len(content))
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception as e:
+            self.send_error(500, str(e))
+
     def handle_sse(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -548,6 +586,7 @@ def main():
                 print(f"[pipeline_web] supervisor_listener spawned on {sp} (PID {proc.pid})")
                 threading.Thread(target=reader_thread, args=(proc, "network", True), daemon=True).start()
 
+    threading.Thread(target=analysis_worker_thread, daemon=True).start()
     threading.Thread(target=batch_timer_thread, daemon=True).start()
 
     server = ThreadedHTTPServer((WEB_HOST, WEB_PORT), DashboardHandler)

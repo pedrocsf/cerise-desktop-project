@@ -659,7 +659,10 @@
         </div>
       </div>
       <div class="sidebar-section" style="flex-shrink:0">
-        <div class="sidebar-title">Batch History</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="sidebar-title" style="margin-bottom:0">Batch History</div>
+          <button id="export-zip-btn" onclick="exportBatches()" style="background:none;border:1px solid var(--border);color:var(--accent);padding:3px 8px;border-radius:5px;font-size:11px;cursor:pointer;font-family:var(--font-sans);transition:border-color .2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">⬇ Export ZIP</button>
+        </div>
         <div id="analysis-progress" style="display:none">
           <div class="progress-bar">
             <div class="progress-bar-inner"></div>
@@ -875,6 +878,17 @@
     evtSource.addEventListener('analysis_start', () => { });
     evtSource.addEventListener('chat_token', e => { const d = JSON.parse(e.data); if (currentChatBotMsg) currentChatBotMsg.textContent += d.token; chatMessages.scrollTop = chatMessages.scrollHeight });
     evtSource.addEventListener('chat_done', () => { chatSend.disabled = false; currentChatBotMsg = null });
+
+    function exportBatches() {
+      const btn = document.getElementById('export-zip-btn');
+      if (!batches.length) { alert('No batches to export yet.'); return }
+      btn.textContent = '⏳ Exporting...'; btn.disabled = true;
+      const a = document.createElement('a');
+      a.href = '/api/export/batches.zip';
+      a.download = `batches_export_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.zip`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => { btn.textContent = '⬇ Export ZIP'; btn.disabled = false }, 1500);
+    }
 
     setInterval(() => { fetch('/api/status').then(r => r.json()).then(updateStatus).catch(() => { document.getElementById('ollama-dot').className = 'dot dot-red'; document.getElementById('ollama-status').textContent = 'Disconnected' }) }, 2000);
     fetch('/api/batches').then(r => r.json()).then(l => { batches = l; renderBatchList() });

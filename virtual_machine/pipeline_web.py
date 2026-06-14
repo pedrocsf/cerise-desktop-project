@@ -11,6 +11,8 @@ import urllib.request
 import urllib.error
 import socketserver
 import pathlib
+import zipfile
+import io
 
 SERIAL_PORTS_FILE = "serial_ports.list"
 BATCH_INTERVAL = 30
@@ -400,6 +402,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(batch)
             else:
                 self.send_json({"error": "Batch not found"}, 404)
+        elif self.path == "/api/export/batches.zip":
+            self.handle_export_zip()
         elif self.path == "/api/stream":
             self.handle_sse()
         elif self.path.startswith("/api/files"):
@@ -432,6 +436,31 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"status": "started"})
         else:
             self.send_error(404)
+    def handle_export_zip(self):
+        with state.lock:
+            batches_snapshot = [dict(b) for b in state.batches]
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for b in batches_snapshot:
+                filename = f"batch_{b['id']:04d}.json"
+                zf.writestr(filename, json.dumps(b, indent=2, ensure_ascii=False))
+            manifest = {
+                "exported_at": time.time(),
+                "batch_count": len(batches_snapshot),
+                "total_events": sum(b.get("event_count", 0) for b in batches_snapshot),
+            }
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+        body = buf.getvalue()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", "attachment; filename=\"batches_export.zip\"")
+        self.send_header("Content-Length", len(body))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _project_root(self):
         return str(pathlib.Path(os.path.dirname(os.path.abspath(__file__))).parent)
 

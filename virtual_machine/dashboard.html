@@ -4,7 +4,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cerise Pipeline Dashboard</title>
+  <title>MalTrace</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕷️</text></svg>">
   <style>
     * {
       margin: 0;
@@ -593,6 +594,30 @@
       gap: 8px
     }
 
+    .llm-tab {
+      flex: 1;
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 4px 0;
+      border-radius: 5px;
+      font-size: 10px;
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap
+    }
+
+    .llm-tab.active {
+      background: rgba(0, 184, 217, 0.15);
+      border-color: var(--accent);
+      color: var(--accent)
+    }
+
+    .llm-tab:hover:not(.active) {
+      color: var(--text);
+      border-color: var(--muted)
+    }
+
     @keyframes pulse {
 
       0%,
@@ -722,14 +747,52 @@
       </div>
     </div>
     <div class="chat-panel">
-      <div class="chat-header">Chat with Llama
+      <div class="chat-header" style="cursor:pointer;user-select:none" onclick="toggleLlmConfig()">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span>Chat · <span id="chat-agent-label" style="color:var(--accent);font-size:12px">llama2 (ollama)</span></span>
+          <span id="llm-config-chevron" style="font-size:11px;color:var(--muted)">⚙ Configure</span>
+        </div>
         <div id="chat-progress" style="display:none">
-          <div class="progress-bar">
-            <div class="progress-bar-inner"></div>
-          </div>
+          <div class="progress-bar"><div class="progress-bar-inner"></div></div>
           <div class="progress-info" id="chat-progress-info">Thinking...</div>
         </div>
       </div>
+
+      <div id="llm-config-panel" style="display:none;padding:12px;border-bottom:1px solid var(--border);background:var(--bg);flex-shrink:0">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:10px">LLM Agent</div>
+
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <button class="llm-tab active" data-prov="ollama" onclick="selectProvider('ollama')">Local (Ollama)</button>
+          <button class="llm-tab" data-prov="openai" onclick="selectProvider('openai')">OpenAI</button>
+          <button class="llm-tab" data-prov="gemini" onclick="selectProvider('gemini')">Gemini</button>
+          <button class="llm-tab" data-prov="claude" onclick="selectProvider('claude')">Claude</button>
+        </div>
+
+        <div id="llm-ollama-section">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+            <select id="llm-ollama-model" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;outline:none">
+              <option value="">Loading models...</option>
+            </select>
+            <button onclick="refreshOllamaModels()" style="background:none;border:1px solid var(--border);color:var(--muted);padding:5px 8px;border-radius:6px;font-size:11px;cursor:pointer" title="Refresh">↻</button>
+          </div>
+        </div>
+
+        <div id="llm-cloud-section" style="display:none">
+          <input id="llm-cloud-model" type="text" placeholder="Model name (e.g. gpt-4o)" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:12px;outline:none;margin-bottom:8px;box-sizing:border-box">
+          <div style="position:relative">
+            <input id="llm-api-key" type="password" placeholder="API Key" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 30px 6px 8px;border-radius:6px;font-size:12px;outline:none;box-sizing:border-box">
+            <span onclick="toggleKeyVisibility()" style="position:absolute;right:8px;top:6px;cursor:pointer;font-size:12px;color:var(--muted)" title="Show/hide">👁</span>
+          </div>
+          <div id="llm-cloud-hint" style="font-size:10px;color:var(--muted);margin-top:5px"></div>
+        </div>
+
+        <div style="display:flex;gap:6px;margin-top:10px">
+          <button onclick="saveLlmConfig()" style="flex:1;background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:6px;padding:7px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Apply</button>
+          <button onclick="toggleLlmConfig()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:7px 10px;font-size:12px;cursor:pointer">Cancel</button>
+        </div>
+        <div id="llm-config-msg" style="font-size:11px;margin-top:6px;min-height:14px"></div>
+      </div>
+
       <div class="chat-messages" id="chat-messages">
         <div class="chat-msg bot">Hello! Ask me anything about collected data or security topics.</div>
       </div>
@@ -878,6 +941,91 @@
     evtSource.addEventListener('analysis_start', () => { });
     evtSource.addEventListener('chat_token', e => { const d = JSON.parse(e.data); if (currentChatBotMsg) currentChatBotMsg.textContent += d.token; chatMessages.scrollTop = chatMessages.scrollHeight });
     evtSource.addEventListener('chat_done', () => { chatSend.disabled = false; currentChatBotMsg = null });
+
+    // --- LLM Config ---
+    let currentProvider = 'ollama';
+    const cloudHints = {
+      openai: 'Default model: gpt-4o · Key from platform.openai.com',
+      gemini: 'Default model: gemini-1.5-pro · Key from aistudio.google.com',
+      claude: 'Default model: claude-sonnet-4-6 · Key from console.anthropic.com',
+    };
+
+    function toggleLlmConfig() {
+      const p = document.getElementById('llm-config-panel');
+      const open = p.style.display === 'none';
+      p.style.display = open ? 'block' : 'none';
+      document.getElementById('llm-config-chevron').textContent = open ? '✕ Close' : '⚙ Configure';
+      if (open && currentProvider === 'ollama') refreshOllamaModels();
+    }
+
+    function selectProvider(prov) {
+      currentProvider = prov;
+      document.querySelectorAll('.llm-tab').forEach(b => b.classList.toggle('active', b.dataset.prov === prov));
+      document.getElementById('llm-ollama-section').style.display = prov === 'ollama' ? 'block' : 'none';
+      document.getElementById('llm-cloud-section').style.display = prov !== 'ollama' ? 'block' : 'none';
+      document.getElementById('llm-cloud-hint').textContent = cloudHints[prov] || '';
+      document.getElementById('llm-config-msg').textContent = '';
+    }
+
+    function refreshOllamaModels() {
+      const sel = document.getElementById('llm-ollama-model');
+      sel.innerHTML = '<option value="">Loading...</option>';
+      fetch('/api/llm/ollama-models').then(r => r.json()).then(d => {
+        if (!d.models || !d.models.length) { sel.innerHTML = '<option value="">No models found</option>'; return; }
+        sel.innerHTML = d.models.map(m => `<option value="${m}">${m}</option>`).join('');
+        fetch('/api/llm/config').then(r => r.json()).then(cfg => {
+          if (cfg.provider === 'ollama') sel.value = cfg.model;
+        });
+      }).catch(() => { sel.innerHTML = '<option value="">Ollama not reachable</option>'; });
+    }
+
+    function toggleKeyVisibility() {
+      const f = document.getElementById('llm-api-key');
+      f.type = f.type === 'password' ? 'text' : 'password';
+    }
+
+    function saveLlmConfig() {
+      const msg = document.getElementById('llm-config-msg');
+      let model = '', api_key = '';
+      if (currentProvider === 'ollama') {
+        model = document.getElementById('llm-ollama-model').value;
+        if (!model) { msg.style.color = 'var(--red)'; msg.textContent = 'Select a model first.'; return; }
+      } else {
+        model = document.getElementById('llm-cloud-model').value.trim();
+        api_key = document.getElementById('llm-api-key').value.trim();
+        if (!model) { msg.style.color = 'var(--red)'; msg.textContent = 'Enter a model name.'; return; }
+        if (!api_key) { msg.style.color = 'var(--red)'; msg.textContent = 'API key is required.'; return; }
+      }
+      fetch('/api/llm/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: currentProvider, model, api_key })
+      }).then(r => r.json()).then(d => {
+        if (d.error) { msg.style.color = 'var(--red)'; msg.textContent = d.error; return; }
+        msg.style.color = 'var(--green)'; msg.textContent = 'Saved!';
+        updateAgentLabel(currentProvider, model);
+        setTimeout(() => toggleLlmConfig(), 800);
+      });
+    }
+
+    function updateAgentLabel(provider, model) {
+      document.getElementById('chat-agent-label').textContent = `${model} (${provider})`;
+    }
+
+    fetch('/api/llm/config').then(r => r.json()).then(cfg => {
+      currentProvider = cfg.provider;
+      updateAgentLabel(cfg.provider, cfg.model);
+      selectProvider(cfg.provider);
+      if (cfg.provider !== 'ollama') {
+        document.getElementById('llm-cloud-model').value = cfg.model;
+      }
+    });
+
+    evtSource.addEventListener('llm_config', e => {
+      const d = JSON.parse(e.data);
+      updateAgentLabel(d.provider, d.model);
+    });
+    // --- end LLM Config ---
 
     function exportBatches() {
       const btn = document.getElementById('export-zip-btn');

@@ -16,8 +16,7 @@ import io
 
 SERIAL_PORTS_FILE = "serial_ports.list"
 BATCH_INTERVAL = 30
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama2"
+OLLAMA_URL = "http://localhost:11434"
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
 
@@ -59,6 +58,11 @@ class PipelineState:
         self.events_per_port = {}
         self.ebpf_count = 0
         self.network_count = 0
+        self.llm_config = {
+            "provider": "ollama",
+            "model": "llama2",
+            "api_key": "",
+        }
 
     def get_status(self):
         with self.lock:
@@ -83,6 +87,8 @@ class PipelineState:
                 "ebpf_count": self.ebpf_count,
                 "network_count": self.network_count,
                 "batch_interval": BATCH_INTERVAL,
+                "llm_provider": self.llm_config["provider"],
+                "llm_model": self.llm_config["model"],
             }
 
 
@@ -193,38 +199,130 @@ def reader_thread(proc, source_label, is_supervisor=False):
     broadcast_sse("listener_status", {"source": source_label, "running": still_running})
 
 
-def send_to_ollama_streaming(prompt, on_token, on_done):
-    data = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": True,
-        "options": {"temperature": 0.0}
-    }
+def _llm_ollama(prompt, model, on_token, on_done):
+    data = {"model": model, "prompt": prompt, "stream": True, "options": {"temperature": 0.0}}
     try:
-        json_data = json.dumps(data).encode("utf-8")
         req = urllib.request.Request(
-            OLLAMA_URL,
-            data=json_data,
-            headers={"Content-Type": "application/json"}
+            f"{OLLAMA_URL}/api/generate",
+            data=json.dumps(data).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
         )
-        full_response = []
-        with urllib.request.urlopen(req) as response:
-            for raw_line in response:
+        full = []
+        with urllib.request.urlopen(req) as resp:
+            for raw in resp:
                 try:
-                    chunk = json.loads(raw_line.decode("utf-8"))
+                    chunk = json.loads(raw.decode("utf-8"))
                 except Exception:
                     continue
                 token = chunk.get("response", "")
                 if token:
-                    full_response.append(token)
+                    full.append(token)
                     on_token(token)
                 if chunk.get("done", False):
                     break
-        final_text = "".join(full_response)
-        on_done(final_text, None)
+        on_done("".join(full), None)
     except Exception as e:
         print(f"[pipeline_web] Ollama error: {e}", flush=True)
         on_done(None, str(e))
+
+
+def _llm_openai_compat(prompt, model, api_key, base_url, on_token, on_done):
+    """Handles OpenAI-compatible streaming APIs (OpenAI and Gemini openai-compat endpoint)."""
+    messages = [{"role": "user", "content": prompt}]
+    data = {"model": model, "messages": messages, "stream": True, "temperature": 0.0}
+    try:
+        req = urllib.request.Request(
+            base_url,
+            data=json.dumps(data).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        )
+        full = []
+        with urllib.request.urlopen(req) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except Exception:
+                    continue
+                token = (chunk.get("choices") or [{}])[0].get("delta", {}).get("content", "")
+                if token:
+                    full.append(token)
+                    on_token(token)
+        on_done("".join(full), None)
+    except Exception as e:
+        print(f"[pipeline_web] LLM error ({base_url}): {e}", flush=True)
+        on_done(None, str(e))
+
+
+def _llm_claude(prompt, model, api_key, on_token, on_done):
+    messages = [{"role": "user", "content": prompt}]
+    data = {"model": model, "max_tokens": 2048, "messages": messages, "stream": True}
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps(data).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        full = []
+        with urllib.request.urlopen(req) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                try:
+                    chunk = json.loads(payload)
+                except Exception:
+                    continue
+                if chunk.get("type") == "content_block_delta":
+                    token = chunk.get("delta", {}).get("text", "")
+                    if token:
+                        full.append(token)
+                        on_token(token)
+        on_done("".join(full), None)
+    except Exception as e:
+        print(f"[pipeline_web] Claude error: {e}", flush=True)
+        on_done(None, str(e))
+
+
+def send_to_llm(prompt, on_token, on_done):
+    cfg = state.llm_config
+    provider = cfg["provider"]
+    model = cfg["model"]
+    api_key = cfg["api_key"]
+
+    if provider == "ollama":
+        _llm_ollama(prompt, model, on_token, on_done)
+    elif provider == "openai":
+        _llm_openai_compat(prompt, model, api_key,
+                           "https://api.openai.com/v1/chat/completions", on_token, on_done)
+    elif provider == "gemini":
+        _llm_openai_compat(prompt, model, api_key,
+                           f"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                           on_token, on_done)
+    elif provider == "claude":
+        _llm_claude(prompt, model, api_key, on_token, on_done)
+    else:
+        on_done(None, f"Unknown provider: {provider}")
+
+
+def fetch_ollama_models():
+    try:
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/tags")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return [m["name"] for m in data.get("models", [])]
+    except Exception:
+        return []
 
 
 analysis_queue = queue.Queue()
@@ -322,7 +420,7 @@ def run_analysis(batch):
             "tokens": batch["tokens"]
         })
 
-    send_to_ollama_streaming(prompt, on_token, on_done)
+    send_to_llm(prompt, on_token, on_done)
 
 
 def run_chat(message):
@@ -351,7 +449,7 @@ def run_chat(message):
             "tokens": state.chat_tokens
         })
 
-    send_to_ollama_streaming(message, on_token, on_done)
+    send_to_llm(message, on_token, on_done)
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
@@ -404,6 +502,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": "Batch not found"}, 404)
         elif self.path == "/api/export/batches.zip":
             self.handle_export_zip()
+        elif self.path == "/api/llm/config":
+            with state.lock:
+                cfg = dict(state.llm_config)
+            cfg["api_key"] = "***" if cfg["api_key"] else ""
+            self.send_json(cfg)
+        elif self.path == "/api/llm/ollama-models":
+            self.send_json({"models": fetch_ollama_models()})
         elif self.path == "/api/stream":
             self.handle_sse()
         elif self.path.startswith("/api/files"):
@@ -415,12 +520,15 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def _read_json_body(self):
+        content_len = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_len)
+        return json.loads(body)
+
     def do_POST(self):
         if self.path == "/api/chat":
-            content_len = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_len)
             try:
-                data = json.loads(body)
+                data = self._read_json_body()
                 message = data.get("message", "").strip()
             except Exception:
                 self.send_json({"error": "Invalid JSON"}, 400)
@@ -434,6 +542,29 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             chat_thread = threading.Thread(target=run_chat, args=(message,), daemon=True)
             chat_thread.start()
             self.send_json({"status": "started"})
+        elif self.path == "/api/llm/config":
+            try:
+                data = self._read_json_body()
+            except Exception:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            provider = data.get("provider", "").strip()
+            model = data.get("model", "").strip()
+            api_key = data.get("api_key", "").strip()
+            if provider not in ("ollama", "openai", "gemini", "claude"):
+                self.send_json({"error": "Invalid provider"}, 400)
+                return
+            if not model:
+                self.send_json({"error": "Model is required"}, 400)
+                return
+            with state.lock:
+                state.llm_config["provider"] = provider
+                state.llm_config["model"] = model
+                if api_key and api_key != "***":
+                    state.llm_config["api_key"] = api_key
+            print(f"[pipeline_web] LLM config updated: provider={provider} model={model}", flush=True)
+            broadcast_sse("llm_config", {"provider": provider, "model": model})
+            self.send_json({"status": "ok", "provider": provider, "model": model})
         else:
             self.send_error(404)
     def handle_export_zip(self):

@@ -1,0 +1,27 @@
+{
+  "id": 1,
+  "timestamp": 1782830130,
+  "events": [
+    "[ebpf] Waiting for encrypted data on /dev/pts/7...",
+    "[network:/dev/pts/11] {\"event\": \"startup\", \"message\": \"Network packet sniffer is running\"}",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"Sniffing on interfaces: ['eth0']\"}",
+    "[network:/dev/pts/11] {\"packet_number\": 1, \"timestamp\": \"2026-06-30T14:35:01.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:54:00:12:34:56\", \"dst_mac\": \"52:55:0a:00:02:02\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"10.0.2.15\", \"dst_ip\": \"10.0.2.3\", \"protocol_number\": 17, \"protocol_name\": \"UDP\", \"ttl\": 64, \"tos\": 0, \"identification\": 1000, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 70, \"header_length\": 20}, \"transport\": {\"protocol\": \"UDP\", \"src_port\": 48391, \"dst_port\": 53, \"length\": 58, \"checksum\": 12345}, \"dns\": {\"id\": 1111, \"is_response\": false, \"opcode\": 0, \"rcode\": 0, \"queries\": [{\"name\": \"security.ubuntu.com\", \"type\": 1, \"class\": 1}]}, \"payload\": {\"size_bytes\": 0}, \"services\": {\"src_service\": null, \"dst_service\": \"domain\"}, \"process\": {\"pid\": 530, \"name\": \"systemd-resolved\", \"exe\": \"/usr/lib/systemd/systemd-resolved\", \"cmdline\": [\"/lib/systemd/systemd-resolved\"], \"username\": \"systemd-resolve\", \"status\": \"sleeping\", \"create_time\": \"2026-06-30T13:58:41.000000+00:00\", \"ppid\": 1}, \"direction\": \"outbound\", \"raw_packet_size\": 84}",
+    "[network:/dev/pts/11] {\"packet_number\": 2, \"timestamp\": \"2026-06-30T14:35:01.050000+00:00\", \"ethernet\": {\"src_mac\": \"52:55:0a:00:02:02\", \"dst_mac\": \"52:54:00:12:34:56\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"10.0.2.3\", \"dst_ip\": \"10.0.2.15\", \"protocol_number\": 17, \"protocol_name\": \"UDP\", \"ttl\": 64, \"tos\": 0, \"identification\": 1000, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 98, \"header_length\": 20}, \"transport\": {\"protocol\": \"UDP\", \"src_port\": 53, \"dst_port\": 48391, \"length\": 90, \"checksum\": 12345}, \"dns\": {\"id\": 1111, \"is_response\": true, \"opcode\": 0, \"rcode\": 0, \"queries\": [{\"name\": \"security.ubuntu.com\", \"type\": 1, \"class\": 1}], \"answers\": [{\"name\": \"security.ubuntu.com\", \"type\": 1, \"ttl\": 300, \"rdata\": \"91.189.91.43\"}]}, \"payload\": {\"size_bytes\": 0}, \"services\": {\"src_service\": \"domain\", \"dst_service\": null}, \"process\": {\"pid\": 530, \"name\": \"systemd-resolved\", \"exe\": \"/usr/lib/systemd/systemd-resolved\", \"cmdline\": [\"/lib/systemd/systemd-resolved\"], \"username\": \"systemd-resolve\", \"status\": \"sleeping\", \"create_time\": \"2026-06-30T13:58:41.000000+00:00\", \"ppid\": 1}, \"direction\": \"inbound\", \"raw_packet_size\": 112}",
+    "[ebpf] TIME: 14:35:04  COMM: sudo             PID: 6310     UID: 1001   PATH: /usr/bin/sudo FLAGS: [UNEXPECTED_USER]",
+    "[ebpf] 14:35:04  sudo             6311     1001     setresuid  ruid=0, euid=0, suid=0",
+    "[ebpf] 14:35:04  sudo             6311     0        capset     capabilities modified",
+    "[ebpf] COMM: cat              PID: 6320     UID: 0        FLAGS: 0x0    FILE: /etc/shadow",
+    "[ebpf] COMM: cat              PID: 6322     UID: 0        FLAGS: 0x0    FILE: /root/.ssh/id_rsa",
+    "[ebpf] COMM: cat              PID: 6324     UID: 0        FLAGS: 0x0    FILE: /root/.bash_history",
+    "[ebpf] COMM: cat              PID: 6326     UID: 0        FLAGS: 0x0    FILE: /etc/sudoers",
+    "[ebpf] TIME: 14:35:09  COMM: su               PID: 6330     UID: 1001   PATH: /bin/su FLAGS: [UNEXPECTED_USER]",
+    "[ebpf] 14:35:09  su               6330     1001     setuid     uid: 1001 -> 0",
+    "[network:/dev/pts/11] {\"packet_number\": 3, \"timestamp\": \"2026-06-30T14:35:12.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:54:00:12:34:56\", \"dst_mac\": \"52:55:0a:00:02:02\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"10.0.2.15\", \"dst_ip\": \"172.217.29.46\", \"protocol_number\": 1, \"protocol_name\": \"ICMP\", \"ttl\": 64, \"tos\": 0, \"identification\": 3000, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 84, \"header_length\": 20}, \"transport\": {\"protocol\": \"ICMP\", \"type\": 8, \"code\": 0, \"checksum\": 11821, \"id\": 1, \"seq\": 1}, \"payload\": {\"size_bytes\": 0}, \"process\": null, \"direction\": \"outbound\", \"raw_packet_size\": 98}",
+    "[network:/dev/pts/11] {\"packet_number\": 4, \"timestamp\": \"2026-06-30T14:35:13.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:55:0a:00:02:02\", \"dst_mac\": \"52:54:00:12:34:56\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"172.217.29.46\", \"dst_ip\": \"10.0.2.15\", \"protocol_number\": 1, \"protocol_name\": \"ICMP\", \"ttl\": 64, \"tos\": 0, \"identification\": 3001, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 84, \"header_length\": 20}, \"transport\": {\"protocol\": \"ICMP\", \"type\": 0, \"code\": 0, \"checksum\": 13869, \"id\": 1, \"seq\": 1}, \"payload\": {\"size_bytes\": 0}, \"process\": null, \"direction\": \"inbound\", \"raw_packet_size\": 98}"
+  ],
+  "event_count": 16,
+  "response": "",
+  "status": "queued",
+  "tokens": 0,
+  "duration": 0
+}

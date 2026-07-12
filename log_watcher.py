@@ -18,33 +18,18 @@ COLLECTION_NAME = "security_docs"
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 RERANK_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
-# nomic-embed-text-v1.5 requires this task prefix on queries (documents were indexed
-# with "search_document: " in indexer.py). Same model, different prefix per side of
-# the asymmetric retrieval task -- see indexer.py for the matching document-side prefix.
 QUERY_PREFIX = "search_query: "
 
-DENSE_CANDIDATES = 8   # shortlist pulled from the bi-encoder (embedding) index
-SPARSE_CANDIDATES = 8  # shortlist pulled from BM25 (lexical) search
-FUSION_CANDIDATES = 5  # size of the RRF-fused shortlist handed to the cross-encoder
-RRF_K = 60              # standard damping constant for Reciprocal Rank Fusion
+DENSE_CANDIDATES = 8
+SPARSE_CANDIDATES = 8
+FUSION_CANDIDATES = 5
+RRF_K = 60
 
-# Below this cross-encoder score, the closest fact sheet is still "closest" but not
-# actually relevant -- reject it instead of forcing a misleading category onto the
-# LLM. NOT a magic number: calibrated by eval_rag.py (Youden's J sweep) against the
-# synthetic labeled set, which found this threshold gives 0% false-positive rate at
-# 56% recall on 27 known-category examples. Re-run eval_rag.py and update this value
-# once real production logs are available -- the synthetic set is a bootstrap only.
 MIN_RERANK_SCORE = -5.42
 
 BATCH_SIZE = 1
 
 HYDE_ENABLED = True
-# Raw bpftrace/log lines are out-of-distribution for an embedding model trained on
-# natural language (the RAG_docs fact sheets). HyDE bridges that domain gap by having
-# the LLM restate the log as a descriptive sentence *before* embedding it, so the
-# query lands in the same "prose" region of the embedding space as the documents.
-# This costs one extra local LLM call per batch; set HYDE_ENABLED=False to trade
-# retrieval quality for latency.
 HYDE_PROMPT = """### Instruction:
 Rewrite the following raw system log line as a single short, plain-English sentence describing what security-relevant action it represents. Do not judge whether it is malicious. Output ONLY the sentence, nothing else.
 
@@ -105,8 +90,6 @@ class RagRetriever:
                 self.corpus_ids = data["ids"]
                 self.corpus_docs = data["documents"]
                 self.corpus_meta = data["metadatas"]
-                # BM25 catches exact lexical matches (syscall names, paths) that dense
-                # embeddings can blur; corpus is small enough to hold entirely in memory.
                 self.bm25 = BM25Okapi([_tokenize(d) for d in self.corpus_docs])
 
             print("RAG retriever is ready.")
@@ -131,7 +114,6 @@ class RagRetriever:
         )
         ids = results.get("ids", [[]])[0]
         distances = results.get("distances", [[]])[0]
-        # chromadb's "cosine" hnsw space reports distance = 1 - cosine_similarity.
         return [(doc_id, 1 - dist) for doc_id, dist in zip(ids, distances)]
 
     def _sparse_search(self, raw_text, n_results):
@@ -142,9 +124,6 @@ class RagRetriever:
         return [(self.corpus_ids[i], scores[i]) for i in ranked if scores[i] > 0]
 
     def _fuse(self, dense_ranked, sparse_ranked, top_n):
-        # Reciprocal Rank Fusion combines two rankings whose raw scores live on
-        # different, non-comparable scales (cosine similarity vs. BM25) by using only
-        # rank position -- no score normalization/calibration needed between them.
         rrf_scores = {}
         for rank, (doc_id, _) in enumerate(dense_ranked):
             rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + 1.0 / (RRF_K + rank + 1)
@@ -168,8 +147,6 @@ class RagRetriever:
         embed_text = self._hyde_rewrite(query_text)
 
         dense_ranked = self._dense_search(embed_text, DENSE_CANDIDATES)
-        # BM25 always runs against the raw log text: it matches literal tokens
-        # (syscall names, paths) that a HyDE paraphrase could reword or drop.
         sparse_ranked = self._sparse_search(query_text, SPARSE_CANDIDATES)
 
         if not dense_ranked and not sparse_ranked:

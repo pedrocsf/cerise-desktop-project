@@ -9,14 +9,8 @@ DB_DIR = "vector_db"
 COLLECTION_NAME = "security_docs"
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 
-# nomic-embed-text-v1.5 was trained with asymmetric task prefixes: passages must be
-# embedded as "search_document: ..." and queries as "search_query: ...". Mixing this up
-# (or omitting it) makes the model fall back to a much weaker general-purpose projection.
 DOCUMENT_PREFIX = "search_document: "
 
-# All fact sheets in RAG_docs share this exact section structure. Splitting on these
-# headings gives passage-level chunks (one concept per vector) instead of one giant,
-# semantically-averaged embedding per file.
 SECTION_HEADERS = [
     "Script Objective",
     "Anomaly Patterns",
@@ -31,7 +25,6 @@ _SECTION_SPLIT_RE = re.compile(
 
 
 def chunk_document(content):
-    """Split a fact sheet into one chunk per section, each tagged with its heading."""
     title, _, body = content.strip().partition("\n")
     raw_sections = _SECTION_SPLIT_RE.split(body)
 
@@ -46,10 +39,6 @@ def chunk_document(content):
 
 
 def create_or_update_index():
-    """
-    Reads documents from the RAG_docs folder, transforms them into vectors,
-    and stores/updates them in a ChromaDB vector database.
-    """
     if not os.path.exists(DOCS_DIR):
         print(f"Error: Document directory '{DOCS_DIR}' not found.")
         return
@@ -60,9 +49,6 @@ def create_or_update_index():
 
     client = chromadb.PersistentClient(path=DB_DIR)
 
-    # No embedding_function attached: embeddings are computed manually below so that
-    # documents and queries can use different task prefixes (see DOCUMENT_PREFIX above
-    # and the matching search_query prefix used in the retrievers).
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},

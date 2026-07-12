@@ -1,29 +1,3 @@
-"""
-Bootstrap contrastive fine-tuning for the Cerise retrieval encoder.
-
-Theory: nomic-embed-text-v1.5 was pretrained on general web text pairs, not on the
-specific vocabulary/style gap between terse kernel/network telemetry and this
-project's fact-sheet prose -- exactly the domain-gap problem eval_rag.py measures
-(untresholded top-1 accuracy was 19/27 = 70% with the stock model). Fine-tuning with
-MultipleNegativesRankingLoss (in-batch negatives, an InfoNCE-style contrastive loss)
-pulls each (log, correct-section) pair together in embedding space while pushing
-every other pair in the current batch apart -- directly optimizing the geometry that
-RagRetriever.retrieve_context() relies on, instead of hoping a general-purpose
-encoder happens to transfer to this domain.
-
-There is no real production log corpus yet, so TRAIN_PAIRS below is a small,
-hand-written synthetic set -- deliberately disjoint (different phrasing) from
-eval_rag.py's EVAL_SET, so hit-rate@1 there stays an honest, unseen-data measure of
-whether fine-tuning actually helped. Treat the result as a bootstrap starting point:
-re-run with real accumulated (and ideally human-reviewed) production logs as they
-become available, and always re-validate with eval_rag.py before pointing MODEL_NAME
-in indexer.py / log_watcher*.py at the fine-tuned checkpoint -- this script does not
-wire the new model into production automatically.
-
-Usage: python finetune_embeddings.py
-       python indexer.py            # re-index using the new MODEL_NAME, if you adopt it
-       python eval_rag.py           # confirm hit-rate@1 actually improved before adopting
-"""
 import chromadb
 from datasets import Dataset
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, SentenceTransformerTrainingArguments
@@ -39,8 +13,6 @@ BATCH_SIZE = 8
 QUERY_PREFIX = "search_query: "
 DOCUMENT_PREFIX = "search_document: "
 
-# (raw log line, category file). One category ("Anomaly Patterns" section) is the
-# positive target. Deliberately worded differently from eval_rag.py's EVAL_SET.
 TRAIN_PAIRS = [
     ("comm=httpd pid=3312 uid=33 ptrace(PTRACE_ATTACH) target=sshd_pid_812", "dangerous_syscalls.md"),
     ("comm=worker pid=204 bpf(BPF_PROG_ATTACH) called from non-observability binary", "dangerous_syscalls.md"),
@@ -93,8 +65,6 @@ def load_positive_texts():
     client = chromadb.PersistentClient(path=DB_DIR)
     collection = client.get_collection(name=COLLECTION_NAME)
     categories = {cat for _, cat in TRAIN_PAIRS}
-    # index 1 == "Anomaly Patterns" chunk, per indexer.py's SECTION_HEADERS ordering --
-    # the section a raw log line should actually match against.
     ids = [f"{cat}:1" for cat in categories]
     data = collection.get(ids=ids, include=["documents"])
     return dict(zip([i.split(":")[0] for i in data["ids"]], data["documents"]))

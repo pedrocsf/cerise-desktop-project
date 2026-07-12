@@ -1,22 +1,6 @@
-"""
-Labeled retrieval eval harness for the Cerise RAG pipeline.
-
-There is no production log corpus yet, so EVAL_SET below is a small hand-written
-set of realistic log lines per RAG_docs category, plus a handful of benign/unrelated
-lines that should NOT confidently match any category. It exists to answer one
-question objectively: did a given change to indexer.py / log_watcher.py actually
-improve retrieval, or did it just change behavior? Any threshold, prompt, or
-reranking change to the RAG pipeline should be re-run through this script before
-being trusted.
-
-Usage: python eval_rag.py
-"""
 import sys
 from log_watcher import RagRetriever
 
-# (raw log line, expected category file) -- expected=None means "should NOT
-# confidently match any category" (benign activity or activity outside the 9
-# known detection categories).
 EVAL_SET = [
     ("comm=nginx pid=4021 uid=0 syscall=ptrace target_pid=982 target_uid=1000", "dangerous_syscalls.md"),
     ("comm=worker.py pid=771 syscall=bpf cmd=BPF_PROG_LOAD prog_type=kprobe", "dangerous_syscalls.md"),
@@ -63,13 +47,6 @@ EVAL_SET = [
 
 
 def sweep_threshold(rows):
-    """
-    Pick the threshold that maximizes Youden's J statistic (TPR - FPR) over the
-    candidate thresholds actually observed in this eval set. This is a data-driven
-    replacement for guessing a "reasonable-looking" score: the cross-encoder's raw
-    logit scale is calibrated on MS MARCO web passages, not security telemetry, so
-    there is no a priori reason a hand-picked number like 0.0 means anything here.
-    """
     candidates = sorted({round(score, 2) for _, _, score in rows})
     best = None
     for t in candidates:
@@ -91,7 +68,7 @@ def evaluate():
         print("[ERROR] Vector DB is empty or unavailable. Run indexer.py first.")
         sys.exit(1)
 
-    rows = []  # (expected, raw_predicted, score) -- raw_category ignores the gate
+    rows = []
     print(f"{'expected':<26}{'top candidate':<26}{'score':>8}")
     print("-" * 70)
     for query, expected in EVAL_SET:

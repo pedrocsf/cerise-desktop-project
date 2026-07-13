@@ -155,7 +155,7 @@ class RagRetriever:
         best_dense_similarity = dense_ranked[0][1] if dense_ranked else 0.0
 
         candidate_ids = self._fuse(dense_ranked, sparse_ranked, FUSION_CANDIDATES)
-        pairs = [(query_text, self._doc_by_id(doc_id)[0]) for doc_id in candidate_ids]
+        pairs = [(embed_text, self._doc_by_id(doc_id)[0]) for doc_id in candidate_ids]
         rerank_scores = self.reranker.predict(pairs) if pairs else []
         ranked = sorted(zip(candidate_ids, rerank_scores), key=lambda x: x[1], reverse=True)
 

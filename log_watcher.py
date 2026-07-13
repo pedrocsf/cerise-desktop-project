@@ -1,19 +1,20 @@
+"""RAG retrieval library for the Cerise pipeline.
+
+This module is not a standalone entry point. Production flow lives in
+virtual_machine/pipeline_web.py, which consumes RagRetriever for every
+analysis batch. For manual/interactive testing use log_watcher_injector.py.
+"""
+
 import os
-import chromadb
-import sys
-import subprocess
 import re
-import math
+import chromadb
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
 from llama import send_for_analysis
 
-ANSI_ESCAPE_RE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-SERIAL_DEVICES = ["/dev/pts/0", "/dev/pts/1", "/dev/pts/2", "/dev/pts/3", "/dev/pts/4", "/dev/pts/5", "/dev/pts/6", "/dev/pts/7", "/dev/pts/8", "/dev/pts/9", "/dev/pts/10", "/dev/pts/11", "/dev/pts/12"]
-HOST_LISTENER_PATH = "virtual_machine/host_listener"
-
-DB_DIR = "vector_db"
+DB_DIR = os.path.join(_BASE_DIR, "vector_db")
 COLLECTION_NAME = "security_docs"
 MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 RERANK_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -26,8 +27,6 @@ FUSION_CANDIDATES = 5
 RRF_K = 60
 
 MIN_RERANK_SCORE = -5.42
-
-BATCH_SIZE = 1
 
 HYDE_ENABLED = True
 HYDE_PROMPT = """### Instruction:
@@ -65,7 +64,8 @@ def _tokenize(text):
 
 
 class RagRetriever:
-    def __init__(self):
+    def __init__(self, hyde_llm=send_for_analysis):
+        self.hyde_llm = hyde_llm
         self.collection = None
         self.encoder = None
         self.reranker = None
@@ -99,7 +99,7 @@ class RagRetriever:
     def _hyde_rewrite(self, log_content):
         if not HYDE_ENABLED:
             return log_content
-        rewritten = send_for_analysis(HYDE_PROMPT.format(log_content=log_content))
+        rewritten = self.hyde_llm(HYDE_PROMPT.format(log_content=log_content))
         if not rewritten or rewritten.strip().startswith("[ERROR]"):
             return log_content
         return rewritten.strip()
@@ -195,142 +195,7 @@ def format_rag_block(retrieval):
     return f"{header}\n{retrieval['context']}"
 
 
-def clear_screen():
-    os.system('clear' if os.name == 'posix' else 'cls')
-
-
-def show_header():
-    clear_screen()
-
-    print(" > CERISE <")
-
-
-
-def emit_line(message):
-    sys.stdout.write(f"\r\033[K{message}\n")
-    sys.stdout.flush()
-
-
-def print_block(tag, title, content):
-    emit_line(f"[{tag}] {title}")
-    for block_line in content.splitlines():
-        emit_line(f"      {block_line}")
-
-
-def sanitize_output_line(line):
-    line = ANSI_ESCAPE_RE.sub('', line)
-    line = line.replace('\r', '')
-    line = ''.join(ch for ch in line if ch.isprintable() or ch == '\t')
-    return line.strip()
-
-
-def main():
-    show_header()
-
-    if not os.path.exists(HOST_LISTENER_PATH) or not os.access(HOST_LISTENER_PATH, os.X_OK):
-        print(f"[ERROR] Listener executable not found or not executable at '{HOST_LISTENER_PATH}'.")
-        print("Please compile it first, for example:")
-        print("  gcc -o virtual_machine/host_listener virtual_machine/host_listener.c -lssl -lcrypto")
-        return
-
-    proc = None
-
-    try:
-        emit_line(f"[INFO] Starting host_listener for: {', '.join(SERIAL_DEVICES)}")
-        emit_line("[INFO] Raw logs and AI analysis will be displayed in this same window.")
-        emit_line("[INFO] Press Ctrl+C to stop.")
-
-        rag_retriever = RagRetriever()
-
-        stream_states = {device: {'pending_lines': []} for device in SERIAL_DEVICES}
-        if len(SERIAL_DEVICES) == 1:
-            stream_states["default"] = {'pending_lines': []}
-
-        command = ['stdbuf', '-o0', HOST_LISTENER_PATH] + SERIAL_DEVICES
-
-        proc = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-
-        use_prefix_parsing = len(SERIAL_DEVICES) > 1
-
-        for line in proc.stdout:
-            line = sanitize_output_line(line)
-            if not line:
-                continue
-
-            emit_line(f"[RAW] {line}")
-
-            if "Waiting for encrypted data" in line or "Connection closed" in line:
-                continue
-
-            stream_id = "default"
-            log_content = line
-
-            if use_prefix_parsing:
-                match = re.match(r'^\[([^\]]+)\]\s*(.*)', line)
-                if match:
-                    stream_id = match.group(1)
-                    log_content = match.group(2).strip()
-                else:
-                    continue
-
-            if "Attaching " in log_content and "probes" in log_content:
-                emit_line(f"[INFO] Skipping bpftrace header for stream '{stream_id}': {log_content}")
-                continue
-
-            if stream_id not in stream_states:
-                emit_line(f"[WARNING] Received data from an unexpected stream: {stream_id}")
-                continue
-
-            state = stream_states[stream_id]
-            state['pending_lines'].append(log_content)
-
-            if len(state['pending_lines']) >= BATCH_SIZE:
-                batch_to_send = state['pending_lines'][:BATCH_SIZE]
-                state['pending_lines'] = state['pending_lines'][BATCH_SIZE:]
-
-                emit_line("")
-                emit_line(f"[BATCH] Stream='{stream_id}' | Events={len(batch_to_send)} | Status=ready for analysis")
-                log_batch_content = "\n".join(batch_to_send)
-
-                retrieval = rag_retriever.retrieve_context(log_batch_content)
-
-                print_block("RAG", f"Context retrieved for stream '{stream_id}'", format_rag_block(retrieval))
-
-                full_prompt = PROMPT_TEMPLATE.format(
-                    category=retrieval["category"],
-                    confidence=retrieval["confidence"],
-                    score=retrieval["score"],
-                    rag_context=retrieval["context"],
-                    log_content=log_batch_content,
-                )
-
-                emit_line(f"[AI] Starting processing of batch with {len(batch_to_send)} events from stream '{stream_id}'...")
-                analysis = send_for_analysis(full_prompt)
-                if analysis:
-                    print_block("AI", f"Analysis result for stream '{stream_id}'", analysis)
-
-    except KeyboardInterrupt:
-        emit_line("")
-        emit_line("[INFO] Stopping Cerise Log Watcher.")
-    except Exception as e:
-        emit_line("")
-        emit_line(f"[ERROR] An unexpected error occurred: {e}")
-    finally:
-        if proc and proc.poll() is None:
-            emit_line("[INFO] Terminating the listener process...")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                emit_line("[WARNING] The listener did not terminate, forcing shutdown.")
-                proc.kill()
-            emit_line("[INFO] Listener stopped.")
-
 if __name__ == "__main__":
-    main()
+    print("log_watcher.py is a library and no longer runs standalone.")
+    print("  - Production pipeline: python virtual_machine/pipeline_web.py")
+    print("  - Manual testing:      python log_watcher_injector.py")

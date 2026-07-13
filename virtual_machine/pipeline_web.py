@@ -14,21 +14,14 @@ import pathlib
 import zipfile
 import io
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from log_watcher import RagRetriever, PROMPT_TEMPLATE
+
 SERIAL_PORTS_FILE = "serial_ports.list"
 BATCH_INTERVAL = 30
 OLLAMA_URL = "http://localhost:11434"
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
-
-ANALYSIS_PROMPT = (
-    "### Instruction:\n"
-    "You are a malware analyst. Analyze the following data collected from a sandboxed virtual machine.\n"
-    "The data includes kernel-level syscall traces (from eBPF) and network request logs.\n"
-    "Identify suspicious behaviors, potential malware indicators, and describe what the malware appears to be doing.\n"
-    "Output ONLY the analysis result in plain text.\n"
-    "Do NOT output any timestamps, debug logs, or simulate system output.\n"
-    "\n### Input:\n{data}\n\n### Response:\n"
-)
 
 
 class PipelineState:
@@ -89,10 +82,14 @@ class PipelineState:
                 "batch_interval": BATCH_INTERVAL,
                 "llm_provider": self.llm_config["provider"],
                 "llm_model": self.llm_config["model"],
+                "rag_ready": rag_ready.is_set() and rag_retriever is not None,
             }
 
 
 state = PipelineState()
+
+rag_retriever = None
+rag_ready = threading.Event()
 
 
 def load_ports():
@@ -315,6 +312,24 @@ def send_to_llm(prompt, on_token, on_done):
         on_done(None, f"Unknown provider: {provider}")
 
 
+def _llm_sync(prompt):
+    """Blocking send_to_llm wrapper so RagRetriever's HyDE step uses the configured provider."""
+    out = {}
+    send_to_llm(prompt, lambda _token: None, lambda text, err: out.update({"text": text}))
+    return out.get("text")
+
+
+def init_rag_thread():
+    global rag_retriever
+    try:
+        rag_retriever = RagRetriever(hyde_llm=_llm_sync)
+    except Exception as e:
+        print(f"[pipeline_web] RAG retriever failed to initialize: {e}", flush=True)
+    finally:
+        rag_ready.set()
+        broadcast_sse("rag_status", {"ready": rag_retriever is not None})
+
+
 def fetch_ollama_models():
     try:
         req = urllib.request.Request(f"{OLLAMA_URL}/api/tags")
@@ -380,7 +395,6 @@ def batch_timer_thread():
 
 def run_analysis(batch):
     batch_data = "\n".join(batch["events"][-100:])
-    prompt = ANALYSIS_PROMPT.format(data=batch_data)
 
     with state.lock:
         state.analysis_busy = True
@@ -389,6 +403,35 @@ def run_analysis(batch):
         batch["status"] = "analyzing"
 
     broadcast_sse("analysis_start", {"batch_id": batch["id"]})
+
+    rag_ready.wait()
+    if rag_retriever is not None:
+        retrieval = rag_retriever.retrieve_context(batch_data)
+    else:
+        retrieval = {
+            "context": "RAG context is unavailable due to an initialization error.",
+            "category": "UNKNOWN",
+            "confidence": "NONE",
+            "score": 0.0,
+            "dense_similarity": 0.0,
+        }
+
+    with state.lock:
+        batch["rag"] = {
+            "category": retrieval["category"],
+            "confidence": retrieval["confidence"],
+            "score": round(float(retrieval["score"]), 2),
+            "dense_similarity": round(float(retrieval["dense_similarity"]), 2),
+        }
+    broadcast_sse("rag_context", {"batch_id": batch["id"], **batch["rag"]})
+
+    prompt = PROMPT_TEMPLATE.format(
+        category=retrieval["category"],
+        confidence=retrieval["confidence"],
+        score=retrieval["score"],
+        rag_context=retrieval["context"],
+        log_content=batch_data,
+    )
 
     def on_token(token):
         with state.lock:
@@ -712,6 +755,8 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def main():
     print("[pipeline_web] Starting Cerise Pipeline Web Dashboard...")
+
+    threading.Thread(target=init_rag_thread, daemon=True).start()
 
     entries = load_ports()
     state.ports = [path for _, path in entries]

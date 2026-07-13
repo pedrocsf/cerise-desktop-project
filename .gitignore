@@ -1,0 +1,7 @@
+.vscode/
+cerise_menu
+logs/
+venv/
+vector_db/
+__pycache__/
+models/

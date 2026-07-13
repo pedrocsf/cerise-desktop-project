@@ -10,7 +10,8 @@ ANSI_ESCAPE_RE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
 
 DB_DIR = "vector_db"
 COLLECTION_NAME = "security_docs"
-MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
+# Fine-tuned from nomic-ai/nomic-embed-text-v1.5 by finetune_embeddings.py
+MODEL_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "cerise-embed-v1")
 RERANK_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 QUERY_PREFIX = "search_query: "

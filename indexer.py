@@ -7,7 +7,8 @@ from tqdm import tqdm
 DOCS_DIR = "RAG_docs"
 DB_DIR = "vector_db"
 COLLECTION_NAME = "security_docs"
-MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
+# Fine-tuned from nomic-ai/nomic-embed-text-v1.5 by finetune_embeddings.py
+MODEL_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "cerise-embed-v1")
 
 DOCUMENT_PREFIX = "search_document: "
 

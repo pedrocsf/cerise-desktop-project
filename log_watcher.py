@@ -24,14 +24,16 @@ QUERY_PREFIX = "search_query: "
 
 DENSE_CANDIDATES = 8
 SPARSE_CANDIDATES = 8
-FUSION_CANDIDATES = 5
+FUSION_CANDIDATES = 8
 RRF_K = 60
 
 MIN_RERANK_SCORE = -4.49
+MAX_CATEGORIES = 3
 
 HYDE_ENABLED = True
 HYDE_PROMPT = """### Instruction:
-Rewrite the following raw system log line as a single short, plain-English sentence describing what security-relevant action it represents. Do not judge whether it is malicious. Output ONLY the sentence, nothing else.
+The input below may contain multiple unrelated security-relevant actions mixed with benign noise (background DNS, ICMP, routine service activity). Input lines are tagged [ebpf] for kernel-level syscall traces or [network:...] for captured network packets.
+List, one per line, the distinct security-relevant actions present (max 5). Each line: a short, plain-English sentence describing what the action does. Ignore benign/routine noise. Do not judge whether any action is malicious. If there is truly only one relevant action, output one line. Output ONLY the list, nothing else.
 
 ### Input:
 {log_content}
@@ -41,16 +43,27 @@ Rewrite the following raw system log line as a single short, plain-English sente
 
 PROMPT_TEMPLATE = """### Instruction:
 Act as a cybersecurity analyst. Review the logs below for malicious activity based on the provided context.
-If you detect a threat (e.g. unauthorized access, suspicious execution, log tampering), mark it as THREAT.
-Otherwise, mark it as SAFE.
+
+Events tagged [ebpf] are kernel-level syscall traces; events tagged [network:...] are captured network packets. When an ebpf event is followed shortly after by related network activity from the same process, treat them as one causal chain, not independent findings.
+
+Each category block under Context is a retrieval hypothesis, not a verified fact. Cross-check it against the raw input logs before trusting it:
+- HIGH confidence: treat its Anomaly Patterns as a strong prior, but still confirm they match the actual input.
+- MEDIUM confidence: treat it only as a hint; weigh the raw log evidence more heavily than the label.
+- LOW confidence, UNKNOWN category, or a Context block saying no relevant context was found: ignore that category label entirely and analyze the affected input using your own security knowledge.
+If two or more retrieved categories are both plausible, read their Suggested Correlation sections to judge whether the input matches the pattern of them occurring together.
+
+Mark VERDICT as THREAT when you find clear malicious activity (e.g. unauthorized access, suspicious execution, log tampering), SUSPICIOUS when the input matches a Normal Pattern (common false positive) about as plausibly as it matches an Anomaly Pattern, or when correlation with another category would be needed to be sure, or SAFE otherwise.
+
+SEVERITY must start from the Base Criticality Level of whichever retrieved category you judge most relevant (if any), then adjust up or down based on how strongly the raw logs corroborate its Anomaly Patterns and whether multiple categories correlate together. State that adjustment reasoning in ANALYSIS.
+
+ANALYSIS must (a) state whether you agree with each retrieved category above, and (b) cite at least one concrete piece of evidence from the input (process name, pid, path, ip:port, or similar) supporting the verdict.
 
 Format that you need to follow:
-VERDICT: <SAFE/THREAT>
+VERDICT: <SAFE/SUSPICIOUS/THREAT>
 SEVERITY: <1-5>
 ANALYSIS: <Short explanation>
 
-### Context:
-Closest known category: {category} (retrieval confidence: {confidence}, rerank score: {score:.2f})
+### Context (top matching categories, most to least relevant):
 {rag_context}
 
 ### Input Logs:
@@ -137,8 +150,13 @@ class RagRetriever:
         idx = self.corpus_ids.index(doc_id)
         return self.corpus_docs[idx], self.corpus_meta[idx]
 
-    def retrieve_context(self, query_text):
-        empty = {"context": None, "category": "UNKNOWN", "raw_category": "UNKNOWN", "confidence": "NONE", "score": 0.0, "dense_similarity": 0.0}
+    def retrieve_context(self, query_text, max_categories=MAX_CATEGORIES):
+        """Returns up to `max_categories` distinct best-matching RAG_docs categories
+        (not just the single top chunk), so multi-technique batches can surface more
+        than one Anomaly Patterns / Suggested Correlation section to the prompt.
+        """
+        empty = {"candidates": [], "context": None, "category": "UNKNOWN", "raw_category": "UNKNOWN",
+                  "confidence": "NONE", "score": 0.0, "dense_similarity": 0.0}
 
         if not self.collection:
             return {**empty, "context": "RAG context is unavailable due to an initialization error."}
@@ -163,13 +181,36 @@ class RagRetriever:
         if not ranked:
             return {**empty, "context": "No relevant context found in the knowledge base."}
 
-        top_id, top_score = ranked[0]
-        top_score = float(top_score)
-        doc_text, meta = self._doc_by_id(top_id)
-        raw_category = meta.get("source", "unknown").replace(".md", "")
+        candidates = []
+        seen_categories = set()
+        for doc_id, score in ranked:
+            score = float(score)
+            doc_text, meta = self._doc_by_id(doc_id)
+            raw_category = meta.get("source", "unknown").replace(".md", "")
+            # Keep only the best-scoring chunk per category, so max_categories means
+            # max_categories distinct docs, not distinct chunks of the same doc.
+            if raw_category in seen_categories or score < MIN_RERANK_SCORE:
+                continue
+            seen_categories.add(raw_category)
+            confidence = "HIGH" if score > 5 else "MEDIUM"
+            candidates.append({
+                "category": raw_category,
+                "raw_category": raw_category,
+                "confidence": confidence,
+                "score": score,
+                "dense_similarity": best_dense_similarity,
+                "context": doc_text,
+            })
+            if len(candidates) >= max_categories:
+                break
 
-        if top_score < MIN_RERANK_SCORE:
+        if not candidates:
+            top_id, top_score = ranked[0]
+            top_score = float(top_score)
+            _, meta = self._doc_by_id(top_id)
+            raw_category = meta.get("source", "unknown").replace(".md", "")
             return {
+                "candidates": [],
                 "context": "No sufficiently relevant context found (below confidence threshold).",
                 "category": "UNKNOWN",
                 "raw_category": raw_category,
@@ -178,22 +219,31 @@ class RagRetriever:
                 "dense_similarity": best_dense_similarity,
             }
 
-        confidence = "HIGH" if top_score > 5 else "MEDIUM"
-
+        top = candidates[0]
         return {
-            "context": doc_text,
-            "category": raw_category,
-            "raw_category": raw_category,
-            "confidence": confidence,
-            "score": top_score,
-            "dense_similarity": best_dense_similarity,
+            "candidates": candidates,
+            "context": top["context"],
+            "category": top["category"],
+            "raw_category": top["raw_category"],
+            "confidence": top["confidence"],
+            "score": top["score"],
+            "dense_similarity": top["dense_similarity"],
         }
 
 
 def format_rag_block(retrieval):
-    header = (f"category={retrieval['category']} confidence={retrieval['confidence']} "
-              f"rerank_score={retrieval['score']:.2f} dense_sim={retrieval['dense_similarity']:.2f}")
-    return f"{header}\n{retrieval['context']}"
+    candidates = retrieval.get("candidates") or []
+    if not candidates:
+        header = (f"category={retrieval['category']} confidence={retrieval['confidence']} "
+                  f"rerank_score={retrieval['score']:.2f} dense_sim={retrieval['dense_similarity']:.2f}")
+        return f"{header}\n{retrieval['context']}"
+
+    blocks = []
+    for c in candidates:
+        header = (f"category={c['category']} confidence={c['confidence']} "
+                  f"rerank_score={c['score']:.2f} dense_sim={c['dense_similarity']:.2f}")
+        blocks.append(f"{header}\n{c['context']}")
+    return "\n\n---\n\n".join(blocks)
 
 
 if __name__ == "__main__":

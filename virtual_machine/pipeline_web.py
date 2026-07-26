@@ -15,7 +15,7 @@ import zipfile
 import io
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from log_watcher import RagRetriever, PROMPT_TEMPLATE
+from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block
 
 SERIAL_PORTS_FILE = "serial_ports.list"
 BATCH_INTERVAL = 30
@@ -422,14 +422,12 @@ def run_analysis(batch):
             "confidence": retrieval["confidence"],
             "score": round(float(retrieval["score"]), 2),
             "dense_similarity": round(float(retrieval["dense_similarity"]), 2),
+            "categories": [c["category"] for c in (retrieval.get("candidates") or [])],
         }
     broadcast_sse("rag_context", {"batch_id": batch["id"], **batch["rag"]})
 
     prompt = PROMPT_TEMPLATE.format(
-        category=retrieval["category"],
-        confidence=retrieval["confidence"],
-        score=retrieval["score"],
-        rag_context=retrieval["context"],
+        rag_context=format_rag_block(retrieval),
         log_content=batch_data,
     )
 

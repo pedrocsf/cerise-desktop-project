@@ -1,3 +1,6 @@
+# Measures retrieval quality only (not the LLM's final analysis): runs a labeled
+# set of synthetic log lines through RagRetriever, reports top-1 hit-rate, and
+# sweeps MIN_RERANK_SCORE thresholds to recommend the best cutoff (Youden's J).
 import sys
 from log_watcher import RagRetriever
 

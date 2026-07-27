@@ -5,3 +5,4 @@ venv/
 vector_db/
 __pycache__/
 models/
+secrets/

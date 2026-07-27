@@ -188,7 +188,7 @@ def main():
     print("This model is NOT wired into production. To adopt it:")
     print(f"  1. Set MODEL_NAME = '{OUTPUT_DIR}' in indexer.py, log_watcher.py, log_watcher_injector.py")
     print("  2. Re-run: python indexer.py   (re-embeds RAG_docs with the new model)")
-    print("  3. Re-run: python eval_rag.py  (confirm hit-rate@1 actually improved on unseen examples)")
+    print("  3. Re-run: python eval_retrieval_threshold.py  (confirm hit-rate@1 actually improved on unseen examples)")
 
 
 if __name__ == "__main__":

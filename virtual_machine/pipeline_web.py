@@ -224,10 +224,18 @@ def _llm_ollama(prompt, model, on_token, on_done):
 
 
 def _llm_openai_compat(prompt, model, api_key, base_url, on_token, on_done):
-    """Handles OpenAI-compatible streaming APIs (OpenAI and Gemini openai-compat endpoint)."""
+    """Handles OpenAI-compatible streaming APIs (OpenAI and Gemini openai-compat endpoint).
+
+    temperature=0 is sent for reproducibility, but newer reasoning models reject any
+    value other than the default and answer 400. In that case the request is retried
+    once without the field, so selecting such a model in the dashboard still works.
+    """
     messages = [{"role": "user", "content": prompt}]
-    data = {"model": model, "messages": messages, "stream": True, "temperature": 0.0}
-    try:
+
+    def attempt(send_temperature):
+        data = {"model": model, "messages": messages, "stream": True}
+        if send_temperature:
+            data["temperature"] = 0.0
         req = urllib.request.Request(
             base_url,
             data=json.dumps(data).encode("utf-8"),
@@ -250,7 +258,17 @@ def _llm_openai_compat(prompt, model, api_key, base_url, on_token, on_done):
                 if token:
                     full.append(token)
                     on_token(token)
-        on_done("".join(full), None)
+        return "".join(full)
+
+    try:
+        try:
+            on_done(attempt(True), None)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")
+            if e.code != 400 or "temperature" not in body:
+                raise RuntimeError(f"HTTP {e.code}: {body[:300]}")
+            print(f"[pipeline_web] {model} rejects temperature; retrying without it", flush=True)
+            on_done(attempt(False), None)
     except Exception as e:
         print(f"[pipeline_web] LLM error ({base_url}): {e}", flush=True)
         on_done(None, str(e))

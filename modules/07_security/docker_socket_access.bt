@@ -7,7 +7,7 @@ tracepoint:syscalls:sys_enter_connect
         if (str($sun_path) == "/var/run/docker.sock")
         {
             // Fase 3 do PLANO_ARTIGOS.md: ppid via curtask->real_parent->pid,
-            // sintaxe ainda nao confirmada na VM alvo (depende de BTF).
+            // sintaxe confirmada ao vivo nesta VM (testado em suspicious_exec.bt, 2026-09-10).
             $ppid = curtask->real_parent->pid;
             printf("{\"evt\":\"docker_sock\",\"comm\":\"%s\",\"pid\":%d,\"ppid\":%d,\"uid\":%d,\"path\":\"%s\"}\n", comm, pid, $ppid, uid, str($sun_path));
         }

@@ -9,8 +9,7 @@ BEGIN
 }
 
 // Fase 3 do PLANO_ARTIGOS.md: ppid via curtask->real_parent->pid em cada
-// probe, sintaxe ainda nao confirmada na VM alvo (depende de BTF/debug info
-// do kernel).
+// probe, sintaxe confirmada ao vivo nesta VM (testado em suspicious_exec.bt, 2026-09-10).
 
 // ptrace - process debugging/injection
 tracepoint:syscalls:sys_enter_ptrace

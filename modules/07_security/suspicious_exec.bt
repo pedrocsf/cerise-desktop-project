@@ -11,10 +11,9 @@ BEGIN
 tracepoint:syscalls:sys_enter_execve
 {
     $filename = str(args->filename);
-    // Fase 3 do PLANO_ARTIGOS.md: PPID via curtask->real_parent->pid depende
-    // de BTF/debug info do kernel estar disponivel para o bpftrace resolver
-    // o layout de struct task_struct. Sintaxe nao confirmada na VM alvo
-    // ainda (ver Fase 3) — validar ao vivo antes de confiar no valor.
+    // Fase 3 do PLANO_ARTIGOS.md: PPID via curtask->real_parent->pid.
+    // Confirmado ao vivo nesta VM em 2026-09-10 (cadeia systemd-run -> bash
+    // reportou PPID correto).
     $ppid = curtask->real_parent->pid;
 
     // Flag 1: Execution from temporary/suspicious directories
@@ -53,7 +52,8 @@ tracepoint:syscalls:sys_enter_execve
     // normal or the signature of a web shell / content-triggered exploit
     // described in RAG_docs/suspicious_exec.md. This trades more event
     // volume for not silently dropping the exact pattern that doc was
-    // reinforced to cover.
+    // reinforced to cover. The parent-PID value itself is now confirmed
+    // live on this VM (see comment above the execve probe).
     $shell_interpreter = 0;
     if ($filename == "/bin/sh" ||
         $filename == "/bin/bash" ||

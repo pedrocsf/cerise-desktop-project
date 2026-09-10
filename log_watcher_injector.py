@@ -46,6 +46,8 @@ def main():
             emit_line(f"\n[USER] Processing input: '{user_input}'")
 
             retrieval = rag_retriever.retrieve_context(user_input)
+            if retrieval.get("hyde_degraded"):
+                emit_line("[HyDE degradado] resumo de reescrita indisponível, retrieval usou o log bruto")
             print_block("RAG", "Context retrieved", format_rag_block(retrieval))
 
             full_prompt = PROMPT_TEMPLATE.format(

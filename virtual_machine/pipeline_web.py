@@ -52,6 +52,7 @@ class PipelineState:
         self.events_per_port = {}
         self.ebpf_count = 0
         self.network_count = 0
+        self.hyde_degraded_count = 0
         self.llm_config = {
             "provider": "ollama",
             "model": "llama2",
@@ -84,6 +85,7 @@ class PipelineState:
                 "llm_provider": self.llm_config["provider"],
                 "llm_model": self.llm_config["model"],
                 "rag_ready": rag_ready.is_set() and rag_retriever is not None,
+                "hyde_degraded_count": self.hyde_degraded_count,
             }
 
 
@@ -460,8 +462,10 @@ def run_analysis(batch):
             "confidence": "NONE",
             "score": 0.0,
             "dense_similarity": 0.0,
+            "hyde_degraded": False,
         }
 
+    hyde_degraded = bool(retrieval.get("hyde_degraded"))
     with state.lock:
         batch["rag"] = {
             "category": retrieval["category"],
@@ -469,7 +473,10 @@ def run_analysis(batch):
             "score": round(float(retrieval["score"]), 2),
             "dense_similarity": round(float(retrieval["dense_similarity"]), 2),
             "categories": [c["category"] for c in (retrieval.get("candidates") or [])],
+            "hyde_degraded": hyde_degraded,
         }
+        if hyde_degraded:
+            state.hyde_degraded_count += 1
     broadcast_sse("rag_context", {"batch_id": batch["id"], **batch["rag"]})
 
     prompt = PROMPT_TEMPLATE.format(
@@ -497,6 +504,9 @@ def run_analysis(batch):
                 warnings = check_factual_consistency(batch_data, text)
                 if warnings:
                     text = text + "\n\n⚠ Não confirmado no log bruto: " + ", ".join(warnings)
+                if hyde_degraded:
+                    text = text + ("\n\n⚠ HyDE indisponível nesta análise: retrieval usou o log bruto "
+                                    "em vez do resumo reescrito (o LLM de reescrita não respondeu).")
                 batch["response"] = text
                 batch["status"] = "complete"
                 batch["factual_warnings"] = warnings

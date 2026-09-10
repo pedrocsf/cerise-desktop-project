@@ -116,11 +116,11 @@ class RagRetriever:
 
     def _hyde_rewrite(self, log_content):
         if not HYDE_ENABLED:
-            return log_content
+            return log_content, False
         rewritten = self.hyde_llm(HYDE_PROMPT.format(log_content=log_content))
         if not rewritten or rewritten.strip().startswith("[ERROR]"):
-            return log_content
-        return rewritten.strip()
+            return log_content, True
+        return rewritten.strip(), False
 
     def _dense_search(self, embed_text, n_results):
         query_embedding = self.encoder.encode(
@@ -172,14 +172,15 @@ class RagRetriever:
 
     def retrieve_context(self, query_text, max_categories=MAX_CATEGORIES):
         empty = {"candidates": [], "context": None, "category": "UNKNOWN", "raw_category": "UNKNOWN",
-                  "confidence": "NONE", "score": 0.0, "dense_similarity": 0.0}
+                  "confidence": "NONE", "score": 0.0, "dense_similarity": 0.0, "hyde_degraded": False}
 
         if not self.collection:
             return {**empty, "context": "RAG context is unavailable due to an initialization error."}
         if self.collection.count() == 0:
             return {**empty, "context": "The RAG knowledge base is empty. Please run indexer.py first."}
 
-        embed_text = self._hyde_rewrite(query_text)
+        embed_text, hyde_degraded = self._hyde_rewrite(query_text)
+        empty["hyde_degraded"] = hyde_degraded
 
         dense_ranked = self._dense_search(embed_text, DENSE_CANDIDATES)
         sparse_ranked = self._sparse_search(query_text, SPARSE_CANDIDATES)
@@ -255,6 +256,7 @@ class RagRetriever:
                 "confidence": "LOW",
                 "score": top_score,
                 "dense_similarity": best_dense_similarity,
+                "hyde_degraded": hyde_degraded,
             }
 
         top = candidates[0]
@@ -267,6 +269,7 @@ class RagRetriever:
             "score": top["score"],
             "dense_similarity": top["dense_similarity"],
             "origin": top.get("origin", "doc"),
+            "hyde_degraded": hyde_degraded,
         }
 
 

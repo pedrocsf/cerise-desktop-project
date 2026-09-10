@@ -101,6 +101,8 @@ def main():
         retrieval = retriever.retrieve_context(batch_data)
         cats = [f"{c['category']}({c['confidence']},{c['score']:.2f})"
                 for c in (retrieval.get("candidates") or [])]
+        if retrieval.get("hyde_degraded"):
+            print("  [HyDE degradado] resumo de reescrita indisponível, retrieval usou o log bruto")
         print(f"  HyDE: {(hyde_out.get('last') or '').strip()[:200].replace(chr(10), ' | ')}")
         print(f"  categorias: {', '.join(cats) or 'nenhuma'}")
 

@@ -15,10 +15,6 @@ BATCH_SIZE = 8
 QUERY_PREFIX = "search_query: "
 DOCUMENT_PREFIX = "search_document: "
 
-# (raw log, mock HyDE rewrite, category). The middle element imitates what the
-# HyDE step produces at retrieval time (log_watcher.HYDE_PROMPT): a short,
-# neutral plain-English description of the action, so training never needs a
-# live LLM. Keep new entries in the same style.
 TRAIN_PAIRS = [
     ("comm=httpd pid=3312 uid=33 ptrace(PTRACE_ATTACH) target=sshd_pid_812",
      "A web server process attached to the memory of the SSH daemon process using ptrace.",
@@ -136,13 +132,40 @@ TRAIN_PAIRS = [
     ("comm=php pid=113 execve('/usr/bin/perl', ['-e', reverse_shell_oneliner])",
      "A PHP process launched a Perl one-liner that opens a shell connection to a remote host.",
      "suspicious_exec.md"),
+
+    ("GET /product.php?id=5%20UNION%20ALL%20SELECT%20NULL,CONCAT(username,0x3a,password)%20FROM%20users-- HTTP/1.1",
+     "An HTTP request appended a UNION-based SQL injection payload to a numeric ID parameter to extract usernames and passwords.",
+     "sql_injection.md"),
+    ("GET /report.php?uid=7%20AND%20SLEEP(5)-- HTTP/1.1 (part of 43 similar requests in 6s, each a different injection technique against the same parameter)",
+     "An automated tool sent dozens of rapid requests against the same parameter, each testing a different SQL injection technique including a time-based blind delay function.",
+     "sql_injection.md"),
+    ("mysqld query log: SELECT table_schema, table_name FROM information_schema.tables -- issued by webapp_user seconds after a matching fragment appeared in an inbound HTTP request",
+     "The application's own database account queried the database's schema metadata tables, something it never does during normal operation, right after unsanitized request content reached the query layer.",
+     "sql_injection.md"),
+    ("GET /item.php?id=1%27;--%20INTO%20OUTFILE%20%27/var/www/html/shell.php%27 HTTP/1.1",
+     "A SQL injection payload used INTO OUTFILE to write attacker-controlled content as a file inside the web root, escalating from data access toward code execution.",
+     "sql_injection.md"),
+
+    ("TLS record content_type=heartbeat declared_record_length=3, followed within 30ms by a heartbeat response on the same connection with declared_record_length=16384",
+     "A tiny heartbeat request was followed by an abnormally large heartbeat response on the same TLS connection, consistent with a heap over-read memory disclosure.",
+     "memory_disclosure.md"),
+    ("TLS connection to a public HTTPS service recorded 40 content_type=heartbeat records in 12 seconds with zero accompanying HTTP request/response exchanges",
+     "A TLS connection carried dozens of heartbeat protocol records in rapid succession with no ordinary application traffic at all, as if the same memory over-read were being repeated to harvest different regions.",
+     "memory_disclosure.md"),
+]
+
+CONTRASTIVE_TRIPLES = [
+    ("TLS record content_type=heartbeat declared_record_length=3, followed within 30ms by a heartbeat response on the same connection with declared_record_length=16384",
+     "A tiny heartbeat request was followed by an abnormally large heartbeat response on the same TLS connection, consistent with a heap over-read memory disclosure.",
+     "memory_disclosure.md",
+     "A client completed a large bulk file transfer over an established TLS session as a sequence of full-size application_data records, with no heartbeat records anywhere and the declared record length matching the actual bytes sent every time."),
 ]
 
 
 def load_positive_texts():
     client = chromadb.PersistentClient(path=DB_DIR)
     collection = client.get_collection(name=COLLECTION_NAME)
-    categories = {cat for _, _, cat in TRAIN_PAIRS}
+    categories = {cat for _, _, cat in TRAIN_PAIRS} | {cat for _, _, cat, _ in CONTRASTIVE_TRIPLES}
     ids = [f"{cat}:1" for cat in categories]
     data = collection.get(ids=ids, include=["documents"])
     return dict(zip([i.split(":")[0] for i in data["ids"]], data["documents"]))
@@ -156,6 +179,17 @@ def build_dataset():
         anchors.append(QUERY_PREFIX + query_text)
         positives.append(DOCUMENT_PREFIX + positive_texts[category])
     return Dataset.from_dict({"anchor": anchors, "positive": positives})
+
+
+def build_contrastive_dataset():
+    positive_texts = load_positive_texts()
+    anchors, positives, negatives = [], [], []
+    for raw_log, hyde_sentence, category, negative_sentence in CONTRASTIVE_TRIPLES:
+        query_text = hyde_sentence if HYDE_ENABLED else raw_log
+        anchors.append(QUERY_PREFIX + query_text)
+        positives.append(DOCUMENT_PREFIX + positive_texts[category])
+        negatives.append(DOCUMENT_PREFIX + negative_sentence)
+    return Dataset.from_dict({"anchor": anchors, "positive": positives, "negative": negatives})
 
 
 def main():
@@ -182,6 +216,25 @@ def main():
         loss=loss,
     )
     trainer.train()
+
+    if CONTRASTIVE_TRIPLES:
+        contrastive_dataset = build_contrastive_dataset()
+        print(f"\nRunning contrastive refinement pass on {len(contrastive_dataset)} "
+              f"(anchor, positive, negative) triplet(s)...")
+        contrastive_args = SentenceTransformerTrainingArguments(
+            output_dir=OUTPUT_DIR,
+            num_train_epochs=EPOCHS,
+            per_device_train_batch_size=min(BATCH_SIZE, len(contrastive_dataset)),
+            save_strategy="no",
+            logging_steps=1,
+        )
+        contrastive_trainer = SentenceTransformerTrainer(
+            model=model,
+            args=contrastive_args,
+            train_dataset=contrastive_dataset,
+            loss=MultipleNegativesRankingLoss(model),
+        )
+        contrastive_trainer.train()
 
     model.save(OUTPUT_DIR)
     print(f"\nSaved fine-tuned model to '{OUTPUT_DIR}'.")

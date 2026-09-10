@@ -1,0 +1,15 @@
+{
+  "id": 11,
+  "timestamp": 1783016400,
+  "events": [
+    "[ebpf] Waiting for encrypted data on /dev/pts/7...",
+    "[network:/dev/pts/11] {\"event\": \"startup\", \"message\": \"Network packet sniffer is running\"}",
+    "[network:/dev/pts/11] {\"packet_number\": 1, \"timestamp\": \"2026-07-05T18:20:00.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:55:0a:00:02:10\", \"dst_mac\": \"52:54:00:12:34:56\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"198.51.100.20\", \"dst_ip\": \"10.0.2.3\", \"protocol_number\": 6, \"protocol_name\": \"TCP\", \"ttl\": 52, \"tos\": 0, \"identification\": 5001, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 512, \"header_length\": 20}, \"transport\": {\"protocol\": \"TCP\", \"src_port\": 51102, \"dst_port\": 80, \"length\": 492, \"checksum\": 33001}, \"http\": {\"type\": \"request\", \"method\": \"POST\", \"path\": \"/import.php\", \"version\": \"HTTP/1.1\", \"headers\": {\"Content-Type\": \"multipart/form-data\", \"Content-Length\": \"48213\"}}, \"payload\": {\"size_bytes\": 472}, \"services\": {\"src_service\": null, \"dst_service\": \"http\"}, \"process\": null, \"direction\": \"inbound\", \"raw_packet_size\": 546}",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"multipart body declares archive.zip, content-type application/zip, 48213 bytes\"}",
+    "[ebpf] 18:20:00.400  unzip            5040     33       open       FILE: /var/www/html/imports/tmp_5040/readme.txt FLAGS: 0x241",
+    "[ebpf] 18:20:00.410  unzip            5040     33       open       FILE: /var/www/html/imports/tmp_5040/data.csv FLAGS: 0x241",
+    "[ebpf] 18:20:00.420  unzip            5040     33       open       FILE: ../../../../etc/cron.d/system-update FLAGS: 0x241 [PATH_TRAVERSAL]",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"HTTP response 200 to 198.51.100.20 for POST /import.php, 3 files reported extracted\"}",
+    "[ebpf] 18:20:01.000  cron             810      0        exec       PATH: /usr/sbin/cron reload (picked up new file in /etc/cron.d)"
+  ]
+}

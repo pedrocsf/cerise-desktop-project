@@ -1,0 +1,20 @@
+{
+  "id": 8,
+  "timestamp": 1783011600,
+  "events": [
+    "[ebpf] Waiting for encrypted data on /dev/pts/7...",
+    "[network:/dev/pts/11] {\"event\": \"startup\", \"message\": \"Network packet sniffer is running\"}",
+    "[network:/dev/pts/11] {\"event\": \"info\", \"message\": \"Sniffing on interfaces: ['eth0']\"}",
+    "[network:/dev/pts/11] {\"packet_number\": 1, \"timestamp\": \"2026-07-05T17:05:00.000000+00:00\", \"ethernet\": {\"src_mac\": \"52:54:00:12:34:56\", \"dst_mac\": \"52:55:0a:00:02:02\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"10.0.2.15\", \"dst_ip\": \"10.0.2.3\", \"protocol_number\": 17, \"protocol_name\": \"UDP\", \"ttl\": 64, \"tos\": 0, \"identification\": 1000, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 70, \"header_length\": 20}, \"transport\": {\"protocol\": \"UDP\", \"src_port\": 48391, \"dst_port\": 53, \"length\": 58, \"checksum\": 12345}, \"dns\": {\"id\": 1111, \"is_response\": false, \"opcode\": 0, \"rcode\": 0, \"queries\": [{\"name\": \"security.ubuntu.com\", \"type\": 1, \"class\": 1}]}, \"payload\": {\"size_bytes\": 0}, \"services\": {\"src_service\": null, \"dst_service\": \"domain\"}, \"process\": {\"pid\": 530, \"name\": \"systemd-resolved\", \"exe\": \"/usr/lib/systemd/systemd-resolved\", \"cmdline\": [\"/lib/systemd/systemd-resolved\"], \"username\": \"systemd-resolve\", \"status\": \"sleeping\", \"create_time\": \"2026-07-05T13:58:41.000000+00:00\", \"ppid\": 1}, \"direction\": \"outbound\", \"raw_packet_size\": 84}",
+    "[network:/dev/pts/11] {\"packet_number\": 2, \"timestamp\": \"2026-07-05T17:05:00.050000+00:00\", \"ethernet\": {\"src_mac\": \"52:54:00:12:34:56\", \"dst_mac\": \"52:55:0a:00:02:02\", \"type\": \"0x800\"}, \"network\": {\"version\": 4, \"src_ip\": \"10.0.2.3\", \"dst_ip\": \"10.0.2.15\", \"protocol_number\": 17, \"protocol_name\": \"UDP\", \"ttl\": 64, \"tos\": 0, \"identification\": 1000, \"flags\": \"DF\", \"fragment_offset\": 0, \"total_length\": 70, \"header_length\": 20}, \"transport\": {\"protocol\": \"UDP\", \"src_port\": 48391, \"dst_port\": 53, \"length\": 58, \"checksum\": 12345}, \"dns\": {\"id\": 1111, \"is_response\": true, \"opcode\": 0, \"rcode\": 0, \"queries\": [{\"name\": \"security.ubuntu.com\", \"type\": 1, \"class\": 1}], \"answers\": [{\"name\": \"security.ubuntu.com\", \"type\": 1, \"ttl\": 300, \"rdata\": \"91.189.91.43\"}]}, \"payload\": {\"size_bytes\": 0}, \"services\": {\"src_service\": null, \"dst_service\": \"domain\"}, \"process\": {\"pid\": 530, \"name\": \"systemd-resolved\", \"exe\": \"/usr/lib/systemd/systemd-resolved\", \"cmdline\": [\"/lib/systemd/systemd-resolved\"], \"username\": \"systemd-resolve\", \"status\": \"sleeping\", \"create_time\": \"2026-07-05T13:58:41.000000+00:00\", \"ppid\": 1}, \"direction\": \"inbound\", \"raw_packet_size\": 84}",
+    "[ebpf] 17:05:10.000  mysqld           3910     112    auth       result=\"Access denied for user 'root'@'10.0.2.60' (using password: YES)\"",
+    "[ebpf] 17:05:10.015  mysqld           3911     112    auth       result=\"Access denied for user 'root'@'10.0.2.60' (using password: YES)\"",
+    "[ebpf] 17:05:10.030  mysqld           3912     112    auth       result=\"Access denied for user 'root'@'10.0.2.60' (using password: YES)\"",
+    "[ebpf] 17:05:10.045  mysqld           3913     112    auth       result=\"Access denied for user 'root'@'10.0.2.60' (using password: YES)\"",
+    "[ebpf] 17:05:10.060  mysqld           3914     112    auth       result=\"Access denied for user 'root'@'10.0.2.60' (using password: YES)\"",
+    "[ebpf] 17:05:10.075  mysqld           3915     112    auth       result=\"Access denied for user 'root'@'10.0.2.60' (using password: YES)\"",
+    "[ebpf] 17:05:10.140  mysqld           3917     0      auth       result=\"OK\" user='root'@'10.0.2.60'",
+    "[ebpf] 17:05:10.145  mysqld           3917     0      query      sql=\"SET AUTOCOMMIT = 0\"",
+    "[ebpf] 17:05:10.150  mysqld           3917     0      query      sql=\"create database textDB\""
+  ]
+}

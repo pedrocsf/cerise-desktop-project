@@ -292,6 +292,33 @@ def _extract_http_info(payload_bytes: bytes) -> Optional[dict]:
 
     return None
 
+
+_TLS_CONTENT_TYPES = {
+    20: "change_cipher_spec",
+    21: "alert",
+    22: "handshake",
+    23: "application_data",
+    24: "heartbeat",
+}
+
+
+def _extract_tls_info(payload_bytes: bytes) -> Optional[dict]:
+    if len(payload_bytes) < 5:
+        return None
+    content_type = payload_bytes[0]
+    if content_type not in _TLS_CONTENT_TYPES:
+        return None
+    version_major = payload_bytes[1]
+    if version_major != 3:
+        return None
+    declared_length = int.from_bytes(payload_bytes[3:5], "big")
+    return {
+        "content_type": _TLS_CONTENT_TYPES[content_type],
+        "declared_record_length": declared_length,
+        "actual_payload_bytes": len(payload_bytes) - 5,
+    }
+
+
 def process_packet(packet):
     try:
         _process_packet_internal(packet)
@@ -424,6 +451,9 @@ def _process_packet_internal(packet):
         http_info = _extract_http_info(raw_data)
         if http_info:
             result["http"] = http_info
+        tls_info = _extract_tls_info(raw_data)
+        if tls_info:
+            result["tls"] = tls_info
     else:
         result["payload"] = {"size_bytes": 0}
 

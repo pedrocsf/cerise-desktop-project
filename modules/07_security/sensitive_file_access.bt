@@ -43,13 +43,28 @@ tracepoint:syscalls:sys_enter_openat
         $sensitive = 1;
     }
     
-    if ($sensitive) {
-        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s\n",
+    // Heuristic for path traversal (Zip Slip / read-side traversal): the
+    // resolved path is not observable from a simple sys_enter_openat
+    // tracepoint (that would need d_path() over the kernel's struct path,
+    // beyond what this probe does), so this reports any literal "../" in the
+    // raw argument instead of trying to resolve the final target. This can't
+    // catch symlink-based or encoded-slash bypasses, only the literal
+    // sequence used by the Zip Slip and read-traversal patterns documented in
+    // RAG_docs/sensitive_file_access.md. Downstream analysis (RAG + LLM)
+    // decides whether the apparent target is actually sensitive.
+    $traversal = 0;
+    if (strcontains($filename, "../")) {
+        $traversal = 1;
+    }
+
+    if ($sensitive || $traversal) {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
                comm,
                pid,
                uid,
                args->flags,
-               $filename);
+               $filename,
+               $traversal ? " [PATH_TRAVERSAL]" : "");
     }
 }
 

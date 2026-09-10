@@ -1,4 +1,7 @@
 tracepoint:syscalls:sys_enter_finit_module
 {
-    printf("{\"e\":\"kml\",\"c\":\"%s\",\"p\":%d,\"u\":%d}\n", comm, pid, uid);
+    // Fase 3 do PLANO_ARTIGOS.md: ppid via curtask->real_parent->pid,
+    // sintaxe ainda nao confirmada na VM alvo (depende de BTF).
+    $ppid = curtask->real_parent->pid;
+    printf("{\"e\":\"kml\",\"c\":\"%s\",\"p\":%d,\"pp\":%d,\"u\":%d}\n", comm, pid, $ppid, uid);
 }

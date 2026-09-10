@@ -4,14 +4,19 @@
 BEGIN
 {
     printf("Monitoring suspicious executions... Press Ctrl-C to end.\n");
-    printf("%-10s %-16s %-8s %-6s %s\n", 
-           "TIME", "COMM", "PID", "UID", "PATH");
+    printf("%-10s %-16s %-8s %-8s %-6s %s\n",
+           "TIME", "COMM", "PID", "PPID", "UID", "PATH");
 }
 
 tracepoint:syscalls:sys_enter_execve
 {
     $filename = str(args->filename);
-    
+    // Fase 3 do PLANO_ARTIGOS.md: PPID via curtask->real_parent->pid depende
+    // de BTF/debug info do kernel estar disponivel para o bpftrace resolver
+    // o layout de struct task_struct. Sintaxe nao confirmada na VM alvo
+    // ainda (ver Fase 3) — validar ao vivo antes de confiar no valor.
+    $ppid = curtask->real_parent->pid;
+
     // Flag 1: Execution from temporary/suspicious directories
     $suspicious_path = 0;
     if (strncmp($filename, "/tmp/", 5) == 0 ||
@@ -26,8 +31,8 @@ tracepoint:syscalls:sys_enter_execve
     
     // Flag 3: Unexpected user (non-root running privileged commands)
     $unexpected_user = 0;
-    if (uid != 0 && uid != 1000 && 
-        ($filename == "/usr/bin/sudo" || 
+    if (uid != 0 && uid != 1000 &&
+        ($filename == "/usr/bin/sudo" ||
          $filename == "/bin/su" ||
          $filename == "/usr/bin/su" ||
          $filename == "/usr/bin/pkexec" ||
@@ -35,23 +40,82 @@ tracepoint:syscalls:sys_enter_execve
     {
         $unexpected_user = 1;
     }
-    
+
+    // Flag 4 (Fase 6B do PLANO_ARTIGOS.md): execution of a common shell
+    // interpreter, regardless of path. Before this, a `/bin/sh -c '...'`
+    // spawned by a web server, or a `bash` spawned by a document/media
+    // converter, produced ZERO events here — those binaries live in normal
+    // paths and are not privilege-escalation tools, so none of Flags 1-3
+    // ever fired. This flag now pairs with $ppid (Fase 3) to answer WHO
+    // spawned the shell — but that value is only as trustworthy as the
+    // curtask->real_parent->pid syntax above, still unconfirmed live on the
+    // target VM. Downstream analysis decides whether a given shell exec is
+    // normal or the signature of a web shell / content-triggered exploit
+    // described in RAG_docs/suspicious_exec.md. This trades more event
+    // volume for not silently dropping the exact pattern that doc was
+    // reinforced to cover.
+    $shell_interpreter = 0;
+    if ($filename == "/bin/sh" ||
+        $filename == "/bin/bash" ||
+        $filename == "/bin/dash" ||
+        $filename == "/usr/bin/sh" ||
+        $filename == "/usr/bin/bash" ||
+        $filename == "/usr/bin/dash")
+    {
+        $shell_interpreter = 1;
+    }
+
     // Report if any suspicious condition is met
-    if ($suspicious_path || $no_tty || $unexpected_user)
+    if ($suspicious_path || $no_tty || $unexpected_user || $shell_interpreter)
     {
         printf("TIME: ");
         time("%H:%M:%S  ");
-        printf("COMM: %-16s PID: %-8d UID: %-6d PATH: %s FLAGS:",
+        printf("COMM: %-16s PID: %-8d PPID: %-8d UID: %-6d PATH: %s FLAGS:",
                comm,
                pid,
+               $ppid,
                uid,
                $filename);
-        
+
         // Add warning flags
         if ($suspicious_path) { printf(" [SUSPICIOUS_PATH]"); }
         if ($unexpected_user) { printf(" [UNEXPECTED_USER]"); }
+        if ($shell_interpreter) { printf(" [SHELL_INTERPRETER]"); }
         printf("\n");
     }
+}
+
+// Fase 6B do PLANO_ARTIGOS.md: nenhum .bt do projeto observava rename/chmod
+// antes disso, entao a etapa "movido pro diretorio servido + chmod" da
+// cadeia de upload descrita em RAG_docs/suspicious_exec.md nunca aparecia no
+// log. Lista fechada de diretorios tipicamente servidos por aplicacao web —
+// mesma limitacao da heuristica de sensitive_file_access.bt: cobre so os
+// nomes de diretorio previstos, nao resolve o caminho completo.
+tracepoint:syscalls:sys_enter_renameat2,
+tracepoint:syscalls:sys_enter_rename
+{
+    $newname = str(args->newname);
+    if (strcontains($newname, "/uploads/") ||
+        strcontains($newname, "/media/") ||
+        strcontains($newname, "/www/") ||
+        strcontains($newname, "/htdocs/"))
+    {
+        $ppid = curtask->real_parent->pid;
+        printf("TIME: ");
+        time("%H:%M:%S  ");
+        printf("COMM: %-16s PID: %-8d PPID: %-8d UID: %-6d RENAME_TO: %s FLAGS: [MOVED_TO_SERVED_DIR]\n",
+               comm, pid, $ppid, uid, $newname);
+    }
+}
+
+tracepoint:syscalls:sys_enter_fchmodat,
+tracepoint:syscalls:sys_enter_chmod
+{
+    $ppid = curtask->real_parent->pid;
+    printf("TIME: ");
+    time("%H:%M:%S  ");
+    printf("COMM: %-16s PID: %-8d PPID: %-8d UID: %-6d FLAGS: [CHMOD_CALLED]\n",
+           comm, pid, $ppid, uid);
 }
 
 END

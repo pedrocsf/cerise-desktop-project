@@ -6,7 +6,10 @@ tracepoint:syscalls:sys_enter_connect
         $sun_path = ((struct sockaddr_un *)args->addr)->sun_path;
         if (str($sun_path) == "/var/run/docker.sock")
         {
-            printf("{\"evt\":\"docker_sock\",\"comm\":\"%s\",\"pid\":%d,\"uid\":%d,\"path\":\"%s\"}\n", comm, pid, uid, str($sun_path));
+            // Fase 3 do PLANO_ARTIGOS.md: ppid via curtask->real_parent->pid,
+            // sintaxe ainda nao confirmada na VM alvo (depende de BTF).
+            $ppid = curtask->real_parent->pid;
+            printf("{\"evt\":\"docker_sock\",\"comm\":\"%s\",\"pid\":%d,\"ppid\":%d,\"uid\":%d,\"path\":\"%s\"}\n", comm, pid, $ppid, uid, str($sun_path));
         }
     }
 }

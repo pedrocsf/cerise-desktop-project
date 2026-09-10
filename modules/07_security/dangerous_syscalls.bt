@@ -4,17 +4,23 @@
 BEGIN
 {
     printf("Monitoring dangerous syscalls... Press Ctrl-C to end.\n");
-    printf("%-10s %-16s %-8s %-6s ", "TIME", "COMM", "PID", "UID");
+    printf("%-10s %-16s %-8s %-8s %-6s ", "TIME", "COMM", "PID", "PPID", "UID");
     printf("%-16s %s\n", "SYSCALL", "DETAILS");
 }
+
+// Fase 3 do PLANO_ARTIGOS.md: ppid via curtask->real_parent->pid em cada
+// probe, sintaxe ainda nao confirmada na VM alvo (depende de BTF/debug info
+// do kernel).
 
 // ptrace - process debugging/injection
 tracepoint:syscalls:sys_enter_ptrace
 {
+    $ppid = curtask->real_parent->pid;
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-6d %-16s ",
+    printf("%-16s %-8d %-8d %-6d %-16s ",
            comm,
            pid,
+           $ppid,
            uid,
            "ptrace");
     printf("request=%d, pid=%d\n",
@@ -25,10 +31,12 @@ tracepoint:syscalls:sys_enter_ptrace
 // mount - filesystem manipulation
 tracepoint:syscalls:sys_enter_mount
 {
+    $ppid = curtask->real_parent->pid;
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-6d %-16s ",
+    printf("%-16s %-8d %-8d %-6d %-16s ",
            comm,
            pid,
+           $ppid,
            uid,
            "mount");
     printf("dev=%s, dir=%s, type=%s\n",
@@ -40,10 +48,12 @@ tracepoint:syscalls:sys_enter_mount
 // umount - filesystem unmounting
 tracepoint:syscalls:sys_enter_umount
 {
+    $ppid = curtask->real_parent->pid;
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-6d %-16s target=%s\n",
+    printf("%-16s %-8d %-8d %-6d %-16s target=%s\n",
            comm,
            pid,
+           $ppid,
            uid,
            "umount",
            str(args->name));
@@ -52,10 +62,12 @@ tracepoint:syscalls:sys_enter_umount
 // setns - namespace manipulation (container escape)
 tracepoint:syscalls:sys_enter_setns
 {
+    $ppid = curtask->real_parent->pid;
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-6d %-16s ",
+    printf("%-16s %-8d %-8d %-6d %-16s ",
            comm,
            pid,
+           $ppid,
            uid,
            "setns");
     printf("fd=%d, nstype=%d\n",
@@ -66,10 +78,12 @@ tracepoint:syscalls:sys_enter_setns
 // unshare - namespace creation
 tracepoint:syscalls:sys_enter_unshare
 {
+    $ppid = curtask->real_parent->pid;
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-6d %-16s flags=0x%x\n",
+    printf("%-16s %-8d %-8d %-6d %-16s flags=0x%x\n",
            comm,
            pid,
+           $ppid,
            uid,
            "unshare",
            args->unshare_flags);
@@ -78,10 +92,12 @@ tracepoint:syscalls:sys_enter_unshare
 // bpf - eBPF program loading
 tracepoint:syscalls:sys_enter_bpf
 {
+    $ppid = curtask->real_parent->pid;
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-6d %-16s cmd=%d\n",
+    printf("%-16s %-8d %-8d %-6d %-16s cmd=%d\n",
            comm,
            pid,
+           $ppid,
            uid,
            "bpf",
            args->cmd);
@@ -90,10 +106,12 @@ tracepoint:syscalls:sys_enter_bpf
 // kexec_load - kernel replacement
 tracepoint:syscalls:sys_enter_kexec_load
 {
+    $ppid = curtask->real_parent->pid;
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-6d %-16s entry=0x%lx\n",
+    printf("%-16s %-8d %-8d %-6d %-16s entry=0x%lx\n",
            comm,
            pid,
+           $ppid,
            uid,
            "kexec_load",
            args->entry);
@@ -102,10 +120,12 @@ tracepoint:syscalls:sys_enter_kexec_load
 // chroot - change root directory
 tracepoint:syscalls:sys_enter_chroot
 {
+    $ppid = curtask->real_parent->pid;
     time("%H:%M:%S  ");
-    printf("%-16s %-8d %-6d %-16s path=%s\n",
+    printf("%-16s %-8d %-8d %-6d %-16s path=%s\n",
            comm,
            pid,
+           $ppid,
            uid,
            "chroot",
            str(args->filename));

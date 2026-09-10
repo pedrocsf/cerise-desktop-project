@@ -1,9 +1,3 @@
-"""RAG retrieval library for the Cerise pipeline.
-
-This module is not a standalone entry point. Production flow lives in
-virtual_machine/pipeline_web.py, which consumes RagRetriever for every
-analysis batch. For manual/interactive testing use log_watcher_injector.py.
-"""
 
 import os
 import re
@@ -16,7 +10,8 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DB_DIR = os.path.join(_BASE_DIR, "vector_db")
 COLLECTION_NAME = "security_docs"
-# Fine-tuned from nomic-ai/nomic-embed-text-v1.5 by finetune_embeddings.py
+CASES_COLLECTION_NAME = "security_cases"
+CASE_CANDIDATES = 3
 MODEL_NAME = os.path.join(_BASE_DIR, "models", "cerise-embed-v1")
 RERANK_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
@@ -46,6 +41,8 @@ Act as a cybersecurity analyst. Review the logs below for malicious activity bas
 
 Events tagged [ebpf] are kernel-level syscall traces; events tagged [network:...] are captured network packets. When an ebpf event is followed shortly after by related network activity from the same process, treat them as one causal chain, not independent findings.
 
+When a Process Tree section is present below, treat it as the primary source of causality between processes: it groups the same [ebpf] events by parent/child ancestry (PID/PPID), so a child appearing under a parent means that parent's process spawned it. Use the chronological Input Logs only to confirm timing and to see events the tree does not cover (network activity, and any probe that does not yet report PPID). If the Process Tree section says no ancestry data was available, fall back to inferring causality from timing and process names in the chronological log, as before.
+
 Each category block under Context is a retrieval hypothesis, not a verified fact. Cross-check it against the raw input logs before trusting it:
 - HIGH confidence: treat its Anomaly Patterns as a strong prior, but still confirm they match the actual input.
 - MEDIUM confidence: treat it only as a hint; weigh the raw log evidence more heavily than the label.
@@ -66,6 +63,9 @@ ANALYSIS: <Short explanation>
 ### Context (top matching categories, most to least relevant):
 {rag_context}
 
+### Process Tree:
+{process_tree}
+
 ### Input Logs:
 {log_content}
 
@@ -81,6 +81,7 @@ class RagRetriever:
     def __init__(self, hyde_llm=send_for_analysis):
         self.hyde_llm = hyde_llm
         self.collection = None
+        self.cases_collection = None
         self.encoder = None
         self.reranker = None
         self.bm25 = None
@@ -98,6 +99,9 @@ class RagRetriever:
             print(f"Connecting to vector database at '{DB_DIR}'...")
             client = chromadb.PersistentClient(path=DB_DIR)
             self.collection = client.get_collection(name=COLLECTION_NAME)
+            self.cases_collection = client.get_or_create_collection(
+                name=CASES_COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+            )
 
             if self.collection.count() > 0:
                 data = self.collection.get(include=["documents", "metadatas"])
@@ -150,11 +154,23 @@ class RagRetriever:
         idx = self.corpus_ids.index(doc_id)
         return self.corpus_docs[idx], self.corpus_meta[idx]
 
+    def _dense_search_cases(self, embed_text, n_results):
+        if not self.cases_collection or self.cases_collection.count() == 0:
+            return []
+        query_embedding = self.encoder.encode(
+            [QUERY_PREFIX + embed_text], convert_to_numpy=True
+        ).tolist()
+        results = self.cases_collection.query(
+            query_embeddings=query_embedding,
+            n_results=min(n_results, self.cases_collection.count()),
+            include=["documents", "metadatas"],
+        )
+        ids = results.get("ids", [[]])[0]
+        docs = results.get("documents", [[]])[0]
+        metas = results.get("metadatas", [[]])[0]
+        return list(zip(ids, docs, metas))
+
     def retrieve_context(self, query_text, max_categories=MAX_CATEGORIES):
-        """Returns up to `max_categories` distinct best-matching RAG_docs categories
-        (not just the single top chunk), so multi-technique batches can surface more
-        than one Anomaly Patterns / Suggested Correlation section to the prompt.
-        """
         empty = {"candidates": [], "context": None, "category": "UNKNOWN", "raw_category": "UNKNOWN",
                   "confidence": "NONE", "score": 0.0, "dense_similarity": 0.0}
 
@@ -175,39 +191,61 @@ class RagRetriever:
 
         candidate_ids = self._fuse(dense_ranked, sparse_ranked, FUSION_CANDIDATES)
         pairs = [(embed_text, self._doc_by_id(doc_id)[0]) for doc_id in candidate_ids]
-        rerank_scores = self.reranker.predict(pairs) if pairs else []
-        ranked = sorted(zip(candidate_ids, rerank_scores), key=lambda x: x[1], reverse=True)
+
+        case_results = self._dense_search_cases(embed_text, CASE_CANDIDATES)
+        case_lookup = {case_id: (case_text, case_meta) for case_id, case_text, case_meta in case_results}
+        case_pairs = [(embed_text, case_text) for _, case_text, _ in case_results]
+
+        all_pairs = pairs + case_pairs
+        all_scores = self.reranker.predict(all_pairs) if all_pairs else []
+        doc_scores = list(zip(candidate_ids, all_scores[:len(pairs)]))
+        case_scores = list(zip(case_lookup.keys(), all_scores[len(pairs):]))
+
+        ranked = sorted(
+            [("doc", doc_id, score) for doc_id, score in doc_scores]
+            + [("case", case_id, score) for case_id, score in case_scores],
+            key=lambda x: x[2],
+            reverse=True,
+        )
 
         if not ranked:
             return {**empty, "context": "No relevant context found in the knowledge base."}
 
         candidates = []
         seen_categories = set()
-        for doc_id, score in ranked:
+        for origin, item_id, score in ranked:
             score = float(score)
-            doc_text, meta = self._doc_by_id(doc_id)
+            if origin == "doc":
+                doc_text, meta = self._doc_by_id(item_id)
+            else:
+                doc_text, meta = case_lookup[item_id]
             raw_category = meta.get("source", "unknown").replace(".md", "")
-            # Keep only the best-scoring chunk per category, so max_categories means
-            # max_categories distinct docs, not distinct chunks of the same doc.
             if raw_category in seen_categories or score < MIN_RERANK_SCORE:
                 continue
             seen_categories.add(raw_category)
             confidence = "HIGH" if score > 5 else "MEDIUM"
-            candidates.append({
+            candidate = {
                 "category": raw_category,
                 "raw_category": raw_category,
                 "confidence": confidence,
                 "score": score,
                 "dense_similarity": best_dense_similarity,
                 "context": doc_text,
-            })
+                "origin": meta.get("origin", "doc"),
+            }
+            if candidate["origin"] == "case":
+                candidate["approved_at"] = meta.get("approved_at")
+            candidates.append(candidate)
             if len(candidates) >= max_categories:
                 break
 
         if not candidates:
-            top_id, top_score = ranked[0]
+            top_origin, top_id, top_score = ranked[0]
             top_score = float(top_score)
-            _, meta = self._doc_by_id(top_id)
+            if top_origin == "doc":
+                _, meta = self._doc_by_id(top_id)
+            else:
+                _, meta = case_lookup[top_id]
             raw_category = meta.get("source", "unknown").replace(".md", "")
             return {
                 "candidates": [],
@@ -228,7 +266,15 @@ class RagRetriever:
             "confidence": top["confidence"],
             "score": top["score"],
             "dense_similarity": top["dense_similarity"],
+            "origin": top.get("origin", "doc"),
         }
+
+
+def _origin_label(candidate):
+    if candidate.get("origin") == "case":
+        approved_at = candidate.get("approved_at", "data desconhecida")
+        return f"[caso observado, confirmado em {approved_at}]"
+    return "[doc curado]"
 
 
 def format_rag_block(retrieval):
@@ -237,10 +283,91 @@ def format_rag_block(retrieval):
         header = (f"category={retrieval['category']} confidence={retrieval['confidence']} "
                   f"rerank_score={retrieval['score']:.2f} dense_sim={retrieval['dense_similarity']:.2f}")
         return f"{header}\n{retrieval['context']}"
+    return "\n\n".join(
+        f"[{_origin_label(c)}] category={c['category']} confidence={c['confidence']} "
+        f"rerank_score={c['score']:.2f} dense_sim={c['dense_similarity']:.2f}\n{c['context']}"
+        for c in candidates
+    )
+
+
+_PID_PATTERNS = [
+    re.compile(r'"pid"\s*:\s*(\d+)'),
+    re.compile(r'"p"\s*:\s*(\d+)'),
+    re.compile(r'\bPID:\s*(\d+)'),
+]
+_PPID_PATTERNS = [
+    re.compile(r'"ppid"\s*:\s*(\d+)'),
+    re.compile(r'"pp"\s*:\s*(\d+)'),
+    re.compile(r'\bPPID:\s*(\d+)'),
+]
+
+
+def _extract_pid_ppid(line):
+    pid = ppid = None
+    for pattern in _PID_PATTERNS:
+        match = pattern.search(line)
+        if match:
+            pid = int(match.group(1))
+            break
+    for pattern in _PPID_PATTERNS:
+        match = pattern.search(line)
+        if match:
+            ppid = int(match.group(1))
+            break
+    if pid is None or ppid is None:
+        return None
+    return pid, ppid
+
+
+def build_process_tree_block(events):
+    pid_ppid = {}
+    pid_lines = {}
+    for line in events:
+        if "[ebpf" not in line:
+            continue
+        parsed = _extract_pid_ppid(line)
+        if not parsed:
+            continue
+        pid, ppid = parsed
+        pid_ppid[pid] = ppid
+        pid_lines.setdefault(pid, []).append(line)
+
+    if not pid_lines:
+        return ("No process ancestry data available for this batch's events "
+                "(none of the underlying probes reported a parent PID here). "
+                "Infer causality from timing and process names in the chronological log instead.")
+
+    def find_root(pid):
+        seen = set()
+        current = pid
+        while pid_ppid.get(current) in pid_lines and pid_ppid[current] not in seen:
+            seen.add(current)
+            current = pid_ppid[current]
+        return current
+
+    children_by_root = {}
+    for pid in pid_lines:
+        children_by_root.setdefault(find_root(pid), []).append(pid)
+
+    blocks = []
+    for root, pids in children_by_root.items():
+        root_ppid = pid_ppid.get(root)
+        note = f" (parent PID {root_ppid}, not seen executing anything in this batch)" if root_ppid is not None else ""
+        block = [f"Process root: PID {root}{note}"]
+        for line in pid_lines[root]:
+            block.append(f"  {line}")
+        for pid in sorted(pids):
+            if pid == root:
+                continue
+            block.append(f"  -> child PID {pid} (parent PID {pid_ppid.get(pid)})")
+            for line in pid_lines[pid]:
+                block.append(f"     {line}")
+        blocks.append("\n".join(block))
+    return "\n\n".join(blocks)
 
     blocks = []
     for c in candidates:
-        header = (f"category={c['category']} confidence={c['confidence']} "
+        header = (f"{_origin_label(c)} category={c['category']} confidence={c['confidence']} "
                   f"rerank_score={c['score']:.2f} dense_sim={c['dense_similarity']:.2f}")
         blocks.append(f"{header}\n{c['context']}")
     return "\n\n---\n\n".join(blocks)

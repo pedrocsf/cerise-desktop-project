@@ -11,8 +11,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 sys.path.insert(0, os.path.join(BASE_DIR, "virtual_machine"))
 
-from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block  # noqa: E402
-from pipeline_web import state, send_to_llm, _llm_sync  # noqa: E402
+from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block, build_process_tree_block
+from pipeline_web import state, send_to_llm, _llm_sync
 
 BATCH_DIR = os.path.join(BASE_DIR, "synthetic_batches")
 RUBRIC_FILE = os.path.join(BASE_DIR, "rubric.md")
@@ -24,7 +24,6 @@ SECRETS = {
 
 
 def load_titles():
-    """Títulos dos batches, lidos do rubric.md (fonte da verdade dos cenários)."""
     titles = {}
     if os.path.exists(RUBRIC_FILE):
         for line in open(RUBRIC_FILE, encoding="utf-8"):
@@ -42,13 +41,11 @@ def load_batches():
             continue
         with open(os.path.join(BATCH_DIR, name), encoding="utf-8") as f:
             data = json.load(f)
-        # Mesmo recorte usado por pipeline_web.run_analysis.
         out.append((int(m.group(1)), "\n".join(data["events"][-100:])))
     return out
 
 
 def analyse(prompt):
-    """Chamada bloqueante ao provedor configurado, devolvendo (texto, erro)."""
     result = {}
     send_to_llm(
         prompt,
@@ -76,16 +73,12 @@ def main():
             raise SystemExit(f"[ERRO] chave não encontrada em {path}")
         api_key = open(path, encoding="utf-8").read().strip()
 
-    # É isto que faz o HyDE e a análise usarem o mesmo modelo: send_to_llm e _llm_sync
-    # leem state.llm_config a cada chamada, exatamente como no pipeline web.
     state.llm_config = {"provider": args.provider, "model": args.model, "api_key": api_key}
     label = args.label or f"{args.provider}/{args.model}"
 
     print(f"provedor: {args.provider} · modelo: {args.model}")
     print("HyDE e análise final usam o mesmo modelo.\n")
 
-    # Registra a saída do HyDE sem alterar a chamada: _llm_sync continua sendo quem
-    # fala com o provedor.
     hyde_out = {}
 
     def hyde_recording(prompt):
@@ -116,6 +109,7 @@ def main():
 
         prompt = PROMPT_TEMPLATE.format(
             rag_context=format_rag_block(retrieval),
+            process_tree=build_process_tree_block(batch_data.splitlines()),
             log_content=batch_data,
         )
         t0 = time.time()

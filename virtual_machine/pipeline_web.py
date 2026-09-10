@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import http.server
 import json
+import re
 import subprocess
 import threading
 import queue
@@ -15,7 +16,7 @@ import zipfile
 import io
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block
+from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block, build_process_tree_block
 
 SERIAL_PORTS_FILE = "serial_ports.list"
 BATCH_INTERVAL = 30
@@ -137,7 +138,6 @@ def broadcast_sse(event_type, data):
 
 
 def _is_network_event(text):
-    """Detect supervisor.py/scapy network events by content fingerprint."""
     return '"packet_number"' in text or '"ethernet"' in text
 
 
@@ -157,7 +157,6 @@ def reader_thread(proc, source_label, is_supervisor=False):
             port_tag = line[1:bracket_end]
             display_line = line[bracket_end + 2:]
 
-        # Classify by content: network packets from scapy always have "packet_number"
         effective_source = "network" if _is_network_event(display_line) else source_label
         tag = f"{effective_source}:{port_tag}" if port_tag else effective_source
 
@@ -224,12 +223,6 @@ def _llm_ollama(prompt, model, on_token, on_done):
 
 
 def _llm_openai_compat(prompt, model, api_key, base_url, on_token, on_done):
-    """Handles OpenAI-compatible streaming APIs (OpenAI and Gemini openai-compat endpoint).
-
-    temperature=0 is sent for reproducibility, but newer reasoning models reject any
-    value other than the default and answer 400. In that case the request is retried
-    once without the field, so selecting such a model in the dashboard still works.
-    """
     messages = [{"role": "user", "content": prompt}]
 
     def attempt(send_temperature):
@@ -331,7 +324,6 @@ def send_to_llm(prompt, on_token, on_done):
 
 
 def _llm_sync(prompt):
-    """Blocking send_to_llm wrapper so RagRetriever's HyDE step uses the configured provider."""
     out = {}
     send_to_llm(prompt, lambda _token: None, lambda text, err: out.update({"text": text}))
     return out.get("text")
@@ -362,7 +354,6 @@ analysis_queue = queue.Queue()
 
 
 def analysis_worker_thread():
-    """Dedicated worker that processes analysis batches one at a time."""
     while True:
         batch = analysis_queue.get()
         if batch is None:
@@ -411,8 +402,45 @@ def batch_timer_thread():
         analysis_queue.put(batch)
 
 
+_CLAIM_PATTERNS = {
+    "pid": re.compile(r"\bp{0,2}pid\b[^0-9\n]{0,10}(\d+)", re.IGNORECASE),
+    "uid": re.compile(r"\buid\b[^0-9\n]{0,10}(\d+)", re.IGNORECASE),
+    "port": re.compile(r"\b(?:src|dst)?_?port\b[^0-9\n]{0,10}(\d+)", re.IGNORECASE),
+}
+_SHARED_PATTERNS = {
+    "ip": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+    "path": re.compile(r"/(?:[\w.\-]+/)*[\w.\-]+"),
+    "hash": re.compile(r"\b[a-fA-F0-9]{32}\b|\b[a-fA-F0-9]{40}\b|\b[a-fA-F0-9]{64}\b"),
+}
+_ANY_NUMBER = re.compile(r"\b\d+\b")
+
+
+def extract_claims(text):
+    facts = {label: set(pattern.findall(text)) for label, pattern in _CLAIM_PATTERNS.items()}
+    facts.update({label: set(pattern.findall(text)) for label, pattern in _SHARED_PATTERNS.items()})
+    return facts
+
+
+def extract_ground_truth(text):
+    any_numbers = set(_ANY_NUMBER.findall(text))
+    facts = {label: any_numbers for label in _CLAIM_PATTERNS}
+    facts.update({label: set(pattern.findall(text)) for label, pattern in _SHARED_PATTERNS.items()})
+    return facts
+
+
+def check_factual_consistency(batch_data, analysis_text):
+    ground_truth = extract_ground_truth(batch_data)
+    claimed = extract_claims(analysis_text)
+    warnings = []
+    for label, claimed_values in claimed.items():
+        for value in sorted(claimed_values - ground_truth.get(label, set())):
+            warnings.append(f"{label.upper()} {value}")
+    return warnings
+
+
 def run_analysis(batch):
     batch_data = "\n".join(batch["events"][-100:])
+    process_tree = build_process_tree_block(batch["events"][-100:])
 
     with state.lock:
         state.analysis_busy = True
@@ -446,6 +474,7 @@ def run_analysis(batch):
 
     prompt = PROMPT_TEMPLATE.format(
         rag_context=format_rag_block(retrieval),
+        process_tree=process_tree,
         log_content=batch_data,
     )
 
@@ -465,18 +494,24 @@ def run_analysis(batch):
             state.analysis_busy = False
             duration = round(time.time() - state.analysis_start_time, 1)
             if text:
+                warnings = check_factual_consistency(batch_data, text)
+                if warnings:
+                    text = text + "\n\n⚠ Não confirmado no log bruto: " + ", ".join(warnings)
                 batch["response"] = text
                 batch["status"] = "complete"
+                batch["factual_warnings"] = warnings
             else:
                 batch["response"] = f"Error: {error}"
                 batch["status"] = "error"
+                batch["factual_warnings"] = []
             batch["duration"] = duration
 
         broadcast_sse("analysis_done", {
             "batch_id": batch["id"],
             "status": batch["status"],
             "duration": duration,
-            "tokens": batch["tokens"]
+            "tokens": batch["tokens"],
+            "factual_warnings": batch["factual_warnings"]
         })
 
     send_to_llm(prompt, on_token, on_done)

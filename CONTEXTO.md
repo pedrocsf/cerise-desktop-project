@@ -119,7 +119,7 @@ Suggested Correlation
 - `indexer.py` / `finetune_embeddings.py` — build da base vetorial e fine-tune do encoder.
 - `eval_retrieval_threshold.py`, `eval_llm.py`, `eval_regex.py`, `run_rag_batches.py`, `rubric.md` — avaliação do pipeline (retrieval e veredito do LLM) contra `synthetic_batches/`, com resultados salvos em `*_results*.md`/`.json`.
 - `read_db.py` — inspeção crua do ChromaDB.
-- `dashboard.html` — front-end único servido por `pipeline_web.py` (status, batches, stream SSE, chat, config de LLM, navegador de arquivos do projeto).
+- `dashboard.html` — front-end único servido por `pipeline_web.py` (status, batches, stream SSE, chat, config de LLM, painel VM Screen com noVNC, terminal do host via ttyd — ver seções 10-12).
 
 ---
 
@@ -140,22 +140,62 @@ O projeto está em fase de **ampliar a cobertura da base RAG** além das 9 categ
 
 ---
 
-## 9. VM guest — imagem perdida, reconstrução pendente (manual)
+## 9. VM guest — reconstruída como `cerise.qcow2` (Ubuntu 18.04 Desktop, sem telemetria ainda)
 
-O `malware_vm.qcow2` referenciado em `vm_controller.c` (`/home/pacto/malware_vm.qcow2`) foi perdido. Era um Ubuntu 18.04 genérico, sem nada além dos scripts de telemetria instalados. Reconstrução ficou marcada para ser feita manualmente pelo usuário; checklist do que é preciso:
+O `malware_vm.qcow2` original (`/home/pacto/malware_vm.qcow2`) foi perdido. O usuário reinstalou um Ubuntu 18.04 Desktop genérico do zero e salvou como **`~/Downloads/cerise.qcow2`** (usuário `cerise` / senha `cerise123`, GNOME, Firefox instalado). `vm_controller.c` já aponta para esse arquivo (`-drive file=/home/pedro/Downloads/cerise.qcow2,...` — path específico desta máquina, ajustar se rodar em outra). Existe um backup em `cerise.qcow2.bak` (feito antes da primeira escrita no disco).
 
-**ISO oficial** (ainda disponível em `releases.ubuntu.com/18.04/` na época deste registro):
-- `ubuntu-18.04.6-desktop-amd64.iso` — instalador gráfico (Ubiquity). Mais fiel ao pedido ("instalação genérica"), mas o Ubiquity não tem um caminho de automação/preseed tão limpo quanto o instalador do Server — considerar se a instalação vai ser manual (via VNC/tela do QEMU) ou automatizada.
-- `ubuntu-18.04.6-live-server-amd64.iso` — instalador via autoinstall/cloud-init, 100% automatizável e mais rápido, mas headless por padrão; precisa instalar um ambiente gráfico leve depois (ex.: `xfce4`) para dar suporte ao controle por mouse/teclado via noVNC que já foi implementado no dashboard.
+**O que essa VM tem hoje:**
+- Um script de demonstração fake em `/home/cerise/malware` (bash): ao rodar, aloca memória aleatória (300–900MB via `/dev/urandom`+`base64`, guardada numa variável bash) e sobe de 2 a 5 processos filhos em busy-loop (`while :; do :; done`), todos herdando o nome `malware` no `comm`/`top` (confirmado: um script bash executado direto herda seu próprio nome no `/proc/pid/comm`, não o do interpretador) — sem executar malware real, só simula alto consumo de CPU/memória sob esse nome. Termina os filhos via `trap ... EXIT INT TERM` ao fechar o `top` que ele mesmo abre no final.
+- `/home/cerise/show_malware_demo.sh`: abre um `gnome-terminal` rodando o script acima.
+- `/home/cerise/Desktop/demo.desktop`: ícone "Sistema" que roda o script anterior (double-click abre o terminal com o `top` mostrando os processos `malware`).
+- **Protetor de tela e bloqueio automático desativados** (`gsettings set org.gnome.desktop.session idle-delay 0`, `org.gnome.desktop.screensaver lock-enabled false` e `idle-activation-enabled false`) — o default do Ubuntu 18.04 travava a tela em poucos segundos de inatividade, o que parecia (e não era) um bug de teclado/mouse no noVNC.
 
-**Usuário do guest:** `cerise` / senha `cerise123`. Precisa de `sudo` (ou rodar como root via systemd), porque `guest_monitor.c` chama `/usr/bin/bpftrace` diretamente, sem `sudo` — ele mesmo precisa estar rodando como root.
+**O que essa VM AINDA NÃO tem** (fica valendo o checklist original, resumido):
+- Os 9 scripts `.bt` de `modules/07_security/*.bt` não foram copiados pra dentro do guest. **Atenção ao mesmo mismatch de nome já documentado**: `guest_monitor.c` espera `docker_socket_acess.bt` e `sensitive_file_acess.bt` (sem o "c" de "access", erro de digitação no C), enquanto os arquivos do repo usam a grafia correta — renomear ao copiar, ou corrigir o C.
+- `supervisor.py` não está instalado (precisa `python3-scapy`, `python3-psutil`).
+- `guest_monitor.c`/`supervisor_monitor.c` não foram compilados dentro do guest (compilar lá, não copiar binário do host — glibc mais nova no host quebra no guest).
+- `bpftrace` não está instalado (checar PPA `iovisor/bpftrace` ou compilar da fonte).
+- Nada inicia sozinho no boot ainda (sem unit systemd para `guest_monitor`/`supervisor_monitor`).
+- SSH não está habilitado/configurado no guest (testado: `hostfwd tcp::2222-:22` conecta via TCP mas não há sshd respondendo — sem banner SSH).
 
-**Scripts de telemetria — já existem no repo, só faltam ser copiados para dentro do guest:**
-- Os 9 `.bt` estão em `modules/07_security/*.bt` (idênticos em conteúdo ao que `guest_monitor.c` espera). **Atenção a um mismatch de nome**: `guest_monitor.c` referencia `/home/cerise/Downloads/docker_socket_acess.bt` e `/home/cerise/Downloads/sensitive_file_acess.bt` (sem o "c" de "access" — erro de digitação no C original), enquanto os arquivos no repo se chamam `docker_socket_access.bt` e `sensitive_file_access.bt` (grafia correta). Ao copiar para o guest, ou renomear os arquivos para bater com o C, ou corrigir o C — do jeito que está hoje, esses dois canais falhariam silenciosamente por arquivo não encontrado.
-- `supervisor.py` (`virtual_machine/supervisor/supervisor.py`) também roda dentro do guest — precisa de `python3-scapy` e `python3-psutil`.
-- `guest_monitor.c` e `supervisor_monitor.c` devem ser **compilados dentro do guest** (não copiar o binário já compilado no host: glibc do Ubuntu 18.04 é mais antiga que a do host atual, binário pode não rodar — erro típico "version GLIBC_x.xx not found").
-- `bpftrace` não vinha nos repositórios padrão do 18.04 no lançamento; verificar disponibilidade via PPA (`iovisor/bpftrace`) ou compilar da fonte na época da reconstrução.
-- As portas virtio-serial aparecem sozinhas como `/dev/vport0pN` assim que a VM sobe (driver `virtio_console` já vem no kernel padrão do Ubuntu) — não precisa de setup adicional no guest para isso.
-- `guest_monitor` e `supervisor_monitor` precisam iniciar sozinhos no boot, como root (unit systemd ou `/etc/rc.local`), senão a telemetria só começa a fluir depois de um login manual.
+**QEMU (host), estado atual de `vm_controller.c`:**
+- Resolução do vídeo trocada de `-vga virtio` (default 1280x800) para `-vga none -device virtio-vga,xres=1024,yres=768` — **4:3 fixo**, pra bater exatamente com o painel "VM Screen" do dashboard (que usa `aspect-ratio:4/3` em CSS). Sem isso, o framebuffer ficava com proporção diferente do painel.
+- Modo CLI não-interativo (`vm_controller start|stop|status`) com **códigos de retorno reais**: as três funções (`start_qemu_vm`, `stop_qemu_vm`, `check_qemu_status`) agora são `int` e retornam sucesso/falha de verdade (antes retornavam sempre 0 mesmo em falha, causando falso-positivo de "VM rodando" no dashboard quando o QEMU falhava por imagem de disco ausente).
 
-**QEMU (host):** `vm_controller.c` já está atualizado com `-vnc 127.0.0.1:0 -vga virtio` (para o painel "VM Screen" com noVNC) e com modo CLI não-interativo (`vm_controller start|stop|status`, usado pelos botões do dashboard) — nenhuma mudança adicional necessária aqui além de trocar a imagem de disco quando a nova estiver pronta.
+---
+
+## 10. VM Screen — noVNC embutido no dashboard
+
+O painel "VM Screen" (aba do `dashboard.html`) embute o framebuffer real da VM via **noVNC** (vendorizado em `virtual_machine/novnc/`, não versionado no git — `.gitignore`; precisa `git clone https://github.com/novnc/noVNC.git virtual_machine/novnc` em cada máquina nova) + **`websockify`** (ponte WebSocket↔TCP para a porta VNC do QEMU, `127.0.0.1:5900`). `pipeline_web.py` spawna o `websockify` sozinho (`spawn_websockify()`) na porta `6080`, e serve os arquivos estáticos do noVNC via rota própria (`/novnc/*`, `serve_novnc_file()`) — **importante**: o `rfb.js` é importado same-origin (`/novnc/core/rfb.js`), não direto da porta do `websockify`, porque `import()` de módulo ES é sujeito a CORS e o `websockify` não manda esse header.
+
+**Bug real encontrado e corrigido**: o container `#vnc-screen` usava `min-height`, mas o noVNC cria uma div interna com `height:100%` — `min-height` não conta como altura definida pra herança percentual em CSS, então a div interna colapsava pra 0 e o canvas nunca tinha tamanho (tela preta permanente, mesmo com WebSocket "connected"). Hoje o container usa `aspect-ratio:4/3` (altura sempre definida, deriva da largura), casando com a resolução 4:3 do QEMU (seção 9).
+
+**Botões Start/Stop VM** no mesmo painel chamam `/api/vm/start` e `/api/vm/stop` (endpoints em `pipeline_web.py`, threads próprias `vm_start_worker`/`vm_stop_worker` que chamam o `vm_controller` real e depois `start_listeners()`/`stop_listeners()`). Estado real (`vm_running`, `vm_busy`, `vm_last_error`) é mostrado no próprio painel, incluindo uma caixa de erro quando o `vm_controller` falha (ex.: disco ausente).
+
+**Gráficos de CPU/Memória da VM** (`VM CPU Usage`/`VM Memory Usage`, abaixo do painel): thread `vm_metrics_thread()` em `pipeline_web.py` lê `/proc/<pid do QEMU>/stat` e `/proc/<pid>/status` a cada 2s (via o PID salvo em `qemu_vm.pid` pelo `vm_controller`), calcula `%CPU` (pode passar de 100%, a VM tem 6 vCPUs) e RSS em MB, guarda os últimos ~3min (`state.vm_metrics`, `collections.deque`). Endpoint `GET /api/vm/metrics`. **Só aparecem no modo real** — ocultos e sem polling no modo demo (ver seção 12).
+
+**Segurança (não resolvido, decisão pendente com o usuário):** `websockify` sobe sem bind explícito de host, ou seja, escuta em `0.0.0.0:6080` — como o dashboard inteiro já roda com `WEB_HOST=0.0.0.0`, qualquer um na rede local que ache a porta consegue controlar mouse/teclado da VM sem autenticação. Não foi restringido ainda porque não se sabe se o acesso de outro dispositivo na LAN é intencional (ex.: apresentação).
+
+---
+
+## 11. Terminal do host no dashboard (ttyd)
+
+O card "Project Files" (navegador de arquivos do projeto, `/api/files`+`/api/file`) foi **removido** do `dashboard.html` e substituído por um terminal interativo de verdade do **host** (a máquina rodando `pipeline_web.py`, não a VM) — pedido explícito do usuário. Implementado com `ttyd` (`sudo apt install ttyd`), spawnado por `pipeline_web.py` (`spawn_ttyd()`) como o usuário do processo (não root), bash, escrita habilitada (`-W`), **bind explícito em `127.0.0.1:7682`** (diferente do `websockify`/VNC — aqui foi feito bind seguro de propósito, dado que expõe um shell completo do host). Embutido via `<iframe src="http://127.0.0.1:7682/">` — como usa `127.0.0.1` fixo (não `location.hostname`), só funciona para quem acessa o dashboard a partir da própria máquina; alguém acessando de outro dispositivo na LAN não alcança esse terminal.
+
+Os endpoints `/api/files` e `/api/file` continuam existindo no backend (não foram removidos), só não são mais usados pelo frontend.
+
+**Efeito colateral do `apt install ttyd` a saber:** o pacote do Ubuntu ativa e sobe sozinho um **serviço systemd `ttyd.service` rodando como root**, na porta `7681` (bind em `lo`, exige login real via PAM — não é um shell root aberto sem senha, mas é um serviço persistente não pedido, sobrevive a reboot). Independente da nossa instância (porta 7682, usuário normal). Pra desativar: `sudo systemctl disable --now ttyd`.
+
+---
+
+## 12. Modo demo (`MALTRACE_DEMO=1`)
+
+Pensado para exibição em congresso sem depender de malware real rodando. Ativa com `MALTRACE_DEMO=1 python3 pipeline_web.py`. Isolado por uma env var — não altera o comportamento do modo real.
+
+- **Pula** inicialização pesada do RAG (`rag_ready.set()` direto) e chama `seed_demo_batches()`.
+- **Semeia 7 batches falsos prontos** (`status: complete`, com `VERDICT`/`SEVERITY`/`ANALYSIS` já escritos) contando uma cadeia de ataque coerente de cryptojacking Linux estilo **TeamTNT**: acesso a arquivo sensível (suspeito) → escalação de privilégio via `setresuid` sem sudo → execução fileless via `memfd` → beacon C2 (`185.220.101.47:4444`) → sondagem do socket do Docker → adulteração de logs. Eventos brutos escritos no formato exato dos `printf` reais dos scripts `.bt` de `modules/07_security/`, não inventados.
+- **Dashboard/gráficos** (Events Over Time, Events by Source, portas na sidebar) populados a partir desses mesmos batches — inclusive `eventTimeline` do frontend é semeado a partir de `/api/batches` na primeira carga (isso beneficia o modo real também: antes ficava vazio até chegar o primeiro evento SSE).
+- **Chat** vem pré-preenchido (`renderDemoChat()` em `dashboard.html`) com uma conversa fixa analista↔sistema sobre esse mesmo incidente (mesmos PIDs, IP, nomes de arquivo dos batches) — não chama o LLM de verdade nessa parte, é só HTML injetado uma vez (`demoChatRendered`).
+- **VM Screen continua REAL** em modo demo (diferença importante de versões anteriores desta feature): conecta no noVNC de verdade, Start/Stop VM funcionam de verdade — só os números/batches/chat são mockados. A ideia é o apresentador rodar o `show_malware_demo.sh` (seção 9) ao vivo na VM enquanto o resto da tela mostra dados prontos.
+- **CPU/Memory Usage ficam ocultos** no modo demo (`#vm-metrics-grid` começa com `display:none` no HTML e só é revelado no modo real; `pollVmMetrics()` nem chega a fazer fetch se `isDemoMode`).
+- Existe também um terminal falso estático (`renderDemoTerminal()`, um `<pre>` com saída de `top` fixa mostrando um processo `upd8r` consumindo CPU/memória) — **não é mais usado**, guardado no código sem chamada ativa, caso sirva de referência/fallback futuro.

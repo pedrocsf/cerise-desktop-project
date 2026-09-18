@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MalTrace</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕷️</text></svg>">
+  <link rel="icon" type="image/svg+xml" href="maltrace-icon.svg">
   <style>
     * {
       margin: 0;
@@ -14,26 +14,34 @@
     }
 
     :root {
-      --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-      --bg: #0B1220;
-      --surface: #131C31;
-      --surface-sec: #1A2740;
-      --border: rgba(0, 184, 217, 0.15);
-      --accent: #00B8D9;
-      --accent-sec: #4DA8FF;
+      --font-sans: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-display: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --bg: #050303;
+      --surface: rgba(24, 11, 12, 0.72);
+      --surface-sec: rgba(15, 7, 8, 0.80);
+      --border: rgba(225, 29, 72, 0.22);
+      --accent: #E11D48;
+      --accent-sec: #FB7185;
       --green: #22C55E;
       --red: #EF4444;
       --amber: #F59E0B;
-      --blue: #3B82F6;
-      --text: #F8FAFC;
-      --muted: #94A3B8;
-      --card-radius: 12px
+      --blue: #FB7185;
+      --text: #FAFAFA;
+      --muted: #A8A29E;
+      --card-radius: 16px;
+      --pill: 999px
     }
 
     body {
       font-family: var(--font-sans);
-      background: var(--bg);
+      background:
+        radial-gradient(1200px 900px at 12% -8%, rgba(116, 16, 44, 0.55) 0%, rgba(159, 18, 57, 0) 45%),
+        radial-gradient(1100px 950px at 105% 8%, rgba(138, 15, 46, 0.55) 0%, rgba(190, 18, 60, 0) 42%),
+        radial-gradient(1000px 900px at 60% 108%, rgba(92, 21, 21, 0.5) 0%, rgba(127, 29, 29, 0) 45%),
+        radial-gradient(800px 700px at -5% 95%, rgba(94, 18, 48, 0.5) 0%, rgba(131, 24, 67, 0) 42%),
+        linear-gradient(155deg, #050202 0%, #0d0405 38%, #080304 68%, #030101 100%);
+      background-attachment: fixed;
       color: var(--text);
       height: 100vh;
       overflow: hidden;
@@ -50,34 +58,44 @@
     }
 
     ::-webkit-scrollbar-thumb {
-      background: rgba(148, 163, 184, 0.4);
+      background: rgba(225, 29, 72, 0.35);
       border-radius: 3px
     }
 
     .topbar {
-      display: flex;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
       align-items: center;
-      justify-content: space-between;
-      padding: 12px 24px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      backdrop-filter: blur(12px);
+      padding: 0 28px;
+      background: rgba(5, 3, 3, 0.25);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       z-index: 10;
       flex-shrink: 0
+    }
+
+    .topbar .title {
+      justify-self: start;
+      padding: 16px 0
+    }
+
+    .topbar .stats {
+      justify-self: end;
+      padding: 16px 0
     }
 
     .topbar h1 {
       display: flex;
       align-items: center;
       gap: 10px;
-      font-size: 18px;
-      font-weight: 700
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -.01em
     }
 
     .topbar h1 span {
-      background: linear-gradient(135deg, var(--accent), var(--accent-sec));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent
+      color: var(--text)
     }
 
     .title-icon {
@@ -132,6 +150,29 @@
       animation: pulse 1.5s infinite
     }
 
+    .sev-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0
+    }
+
+    .sev-dot.sev-low {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green)
+    }
+
+    .sev-dot.sev-mid {
+      background: var(--amber);
+      box-shadow: 0 0 8px var(--amber)
+    }
+
+    .sev-dot.sev-high {
+      background: var(--red);
+      box-shadow: 0 0 8px var(--red)
+    }
+
     .main {
       display: flex;
       flex: 1;
@@ -140,16 +181,20 @@
 
     .sidebar {
       width: 280px;
-      border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      background: var(--surface-sec);
+      background: rgba(5, 3, 3, 0.18);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       flex-shrink: 0
     }
 
     .sidebar-section {
-      padding: 16px;
-      border-bottom: 1px solid var(--border)
+      padding: 20px
+    }
+
+    .sidebar-section+.sidebar-section {
+      border-top: 1px solid rgba(250, 250, 250, 0.06)
     }
 
     .sidebar-title {
@@ -171,16 +216,16 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 6px 10px;
-      background: var(--bg);
-      border-radius: 6px;
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border-radius: var(--pill);
       font-family: var(--font-mono);
       font-size: 12px
     }
 
     .port-count {
       font-size: 11px;
-      color: var(--accent)
+      color: var(--text)
     }
 
     .batch-list {
@@ -195,16 +240,17 @@
       cursor: pointer;
       margin-bottom: 4px;
       border: 1px solid transparent;
+      background: var(--surface-sec);
       transition: all .2s
     }
 
     .batch-item:hover {
-      background: rgba(0, 184, 217, 0.05);
+      background: rgba(225, 29, 72, 0.06);
       border-color: var(--border)
     }
 
     .batch-item.active {
-      background: rgba(0, 184, 217, 0.15);
+      background: rgba(225, 29, 72, 0.14);
       border-color: var(--accent)
     }
 
@@ -250,14 +296,16 @@
 
     .tabs {
       display: flex;
-      gap: 0;
-      border-bottom: 1px solid var(--border);
-      padding: 0 16px;
-      flex-shrink: 0
+      align-items: stretch;
+      justify-self: center;
+      align-self: stretch;
+      gap: 4px
     }
 
     .tab {
-      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
@@ -271,14 +319,15 @@
     }
 
     .tab.active {
-      color: var(--accent);
+      color: var(--text);
+      font-weight: 700;
       border-bottom-color: var(--accent)
     }
 
     .tab-content {
       flex: 1;
       overflow-y: auto;
-      padding: 16px
+      padding: 28px
     }
 
     .tab-panel {
@@ -290,17 +339,20 @@
     }
 
     .card {
-      padding: 16px;
-      background: var(--surface);
-      border-radius: var(--card-radius);
-      border: 1px solid var(--border);
-      margin-bottom: 16px
+      padding: 0;
+      margin-bottom: 36px
     }
 
     .card h3 {
-      font-size: 15px;
-      margin-bottom: 12px;
-      color: var(--text)
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      padding-bottom: 10px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid rgba(250, 250, 250, 0.08)
     }
 
     .card canvas {
@@ -311,17 +363,18 @@
     .dash-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 16px
+      gap: 32px
     }
 
     .dash-kpi {
-      text-align: center;
-      padding: 20px
+      text-align: left;
+      padding: 4px 0
     }
 
     .dash-kpi .kpi-val {
-      font-size: 28px;
+      font-size: 42px;
       font-weight: 700;
+      letter-spacing: -.02em;
       font-family: var(--font-mono)
     }
 
@@ -336,31 +389,27 @@
       font-family: var(--font-mono);
       font-size: 12px;
       line-height: 1.6;
-      border-left: 3px solid transparent
-    }
-
-    .event-line:nth-child(even) {
+      border-left: 3px solid transparent;
       background: var(--surface-sec)
     }
 
     .batch-detail-header {
-      padding: 16px;
-      background: var(--surface);
-      border-radius: var(--card-radius);
-      border: 1px solid var(--border);
-      margin-bottom: 16px
+      padding: 0 0 20px;
+      border-bottom: 1px solid rgba(250, 250, 250, 0.08);
+      margin-bottom: 24px
     }
 
     .batch-detail-header h3 {
-      font-size: 16px;
-      margin-bottom: 8px
+      font-family: var(--font-display);
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 6px
     }
 
     .response-box {
-      padding: 16px;
-      background: var(--surface);
-      border-radius: var(--card-radius);
-      border: 1px solid var(--border);
+      padding: 18px 20px;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 14px;
       font-family: var(--font-mono);
       font-size: 13px;
       line-height: 1.7;
@@ -369,27 +418,35 @@
     }
 
     .events-box {
-      padding: 12px;
-      background: var(--surface);
-      border-radius: var(--card-radius);
-      border: 1px solid var(--border);
-      margin-bottom: 16px;
+      padding: 4px 4px 4px 16px;
+      background: rgba(0, 0, 0, 0.2);
+      border-left: 2px solid var(--border);
+      border-radius: 0;
+      margin-bottom: 32px;
       max-height: 300px;
       overflow-y: auto
     }
 
+    #vnc-screen:fullscreen {
+      width: 100vw;
+      height: 100vh;
+      max-width: none;
+      aspect-ratio: unset
+    }
+
     .chat-panel {
       width: 340px;
-      border-left: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      background: var(--surface-sec);
+      background: rgba(5, 3, 3, 0.18);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       flex-shrink: 0
     }
 
     .chat-header {
-      padding: 16px;
-      border-bottom: 1px solid var(--border);
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(250, 250, 250, 0.06);
       font-weight: 600;
       font-size: 14px
     }
@@ -413,32 +470,34 @@
     }
 
     .chat-msg.user {
-      background: rgba(0, 184, 217, 0.15);
+      background: rgba(225, 29, 72, 0.16);
       align-self: flex-end;
-      border: 1px solid rgba(0, 184, 217, 0.25)
+      border: 1px solid rgba(225, 29, 72, 0.3);
+      border-radius: 16px 16px 4px 16px
     }
 
     .chat-msg.bot {
       background: var(--bg);
       align-self: flex-start;
       border: 1px solid var(--border);
+      border-radius: 16px 16px 16px 4px;
       font-family: var(--font-mono);
       font-size: 12px
     }
 
     .chat-input-area {
-      padding: 12px;
-      border-top: 1px solid var(--border);
+      padding: 16px 20px;
+      border-top: 1px solid rgba(250, 250, 250, 0.06);
       display: flex;
       gap: 8px
     }
 
     .chat-input-area textarea {
       flex: 1;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(250, 250, 250, 0.08);
+      border-radius: 18px;
+      padding: 10px 16px;
       color: var(--text);
       font-family: var(--font-sans);
       font-size: 13px;
@@ -455,14 +514,19 @@
     .chat-input-area button {
       background: linear-gradient(135deg, var(--accent), var(--accent-sec));
       border: none;
-      border-radius: 8px;
-      padding: 10px 16px;
+      border-radius: var(--pill);
+      padding: 10px 20px;
       color: #fff;
       font-weight: 600;
       cursor: pointer;
       font-size: 13px;
-      transition: opacity .2s;
+      box-shadow: 0 4px 16px rgba(225, 29, 72, 0.35);
+      transition: opacity .2s, transform .2s;
       white-space: nowrap
+    }
+
+    .chat-input-area button:hover:not(:disabled) {
+      transform: translateY(-1px)
     }
 
     .chat-input-area button:hover {
@@ -513,7 +577,7 @@
       border: 1px solid var(--border);
       color: var(--muted);
       padding: 4px 0;
-      border-radius: 5px;
+      border-radius: var(--pill);
       font-size: 10px;
       cursor: pointer;
       transition: all .15s;
@@ -521,7 +585,7 @@
     }
 
     .llm-tab.active {
-      background: rgba(0, 184, 217, 0.15);
+      background: rgba(225, 29, 72, 0.16);
       border-color: var(--accent);
       color: var(--accent)
     }
@@ -564,9 +628,14 @@
 <body>
   <div class="topbar">
     <h1 class="title">
-      <img src="maltrace-icon.png" alt="MalTrace Icon" class="title-icon">
+      <img src="maltrace-icon.svg" alt="MalTrace Icon" class="title-icon">
       <span>MalTrace</span>
     </h1>
+    <div class="tabs">
+      <div class="tab active" data-tab="overview">Dashboard</div>
+      <div class="tab" data-tab="detail">Batch Detail</div>
+      <div class="tab" data-tab="vmscreen">VM Screen</div>
+    </div>
     <div class="stats">
       <div class="stat">
         <div class="stat-val" id="stat-events">0</div>
@@ -599,7 +668,7 @@
       <div class="sidebar-section" style="flex-shrink:0">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
           <div class="sidebar-title" style="margin-bottom:0">Batch History</div>
-          <button id="export-zip-btn" onclick="exportBatches()" style="background:none;border:1px solid var(--border);color:var(--accent);padding:3px 8px;border-radius:5px;font-size:11px;cursor:pointer;font-family:var(--font-sans);transition:border-color .2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">⬇ Export ZIP</button>
+          <button id="export-zip-btn" onclick="exportBatches()" style="background:none;border:1px solid var(--border);color:var(--text);padding:4px 12px;border-radius:var(--pill);font-size:11px;cursor:pointer;font-family:var(--font-sans);transition:border-color .2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">⬇ Export ZIP</button>
         </div>
         <div id="analysis-progress" style="display:none">
           <div class="progress-bar">
@@ -613,16 +682,11 @@
       </div>
     </div>
     <div class="content">
-      <div class="tabs">
-        <div class="tab active" data-tab="overview">Dashboard</div>
-        <div class="tab" data-tab="detail">Batch Detail</div>
-        <div class="tab" data-tab="vmscreen">VM Screen</div>
-      </div>
       <div class="tab-content">
         <div class="tab-panel active" id="panel-overview">
           <div class="dash-grid">
             <div class="card dash-kpi">
-              <div class="kpi-val" style="color:var(--accent)" id="kpi-events">0</div>
+              <div class="kpi-val" style="color:var(--text)" id="kpi-events">0</div>
               <div class="kpi-lbl">Total Events</div>
             </div>
             <div class="card dash-kpi">
@@ -630,7 +694,7 @@
               <div class="kpi-lbl">Events / min</div>
             </div>
             <div class="card dash-kpi">
-              <div class="kpi-val" style="color:var(--accent-sec)" id="kpi-batches">0</div>
+              <div class="kpi-val" style="color:var(--text)" id="kpi-batches">0</div>
               <div class="kpi-lbl">Batches Analyzed</div>
             </div>
             <div class="card dash-kpi">
@@ -648,7 +712,7 @@
           </div>
           <div class="card">
             <h3>Terminal</h3>
-            <iframe src="http://127.0.0.1:7682/" style="width:100%;height:420px;border:1px solid var(--border);border-radius:6px;background:#000" title="Host terminal"></iframe>
+            <iframe src="http://127.0.0.1:7682/" style="width:100%;height:420px;border:1px solid var(--border);border-radius:12px;background:#000" title="Host terminal"></iframe>
           </div>
         </div>
         <div class="tab-panel" id="panel-detail">
@@ -662,12 +726,61 @@
               <h3 style="margin:0">VM Screen <span id="vnc-status" style="font-size:12px;color:var(--muted)">disconnected</span></h3>
               <div style="display:flex;align-items:center;gap:10px">
                 <span id="vm-lifecycle-status" style="font-size:12px;color:var(--muted)">stopped</span>
-                <button id="vm-start-btn" onclick="vmAction('start')" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Start VM</button>
-                <button id="vm-stop-btn" onclick="vmAction('stop')" disabled style="background:none;border:1px solid var(--red);color:var(--red);padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Stop VM</button>
+                <button id="vm-start-btn" onclick="vmAction('start')" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:7px 18px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(225,29,72,0.35)">Start VM</button>
+                <button id="vm-stop-btn" onclick="vmAction('stop')" disabled style="background:none;border:1px solid var(--red);color:var(--red);padding:7px 18px;border-radius:var(--pill);font-size:12px;font-weight:600;cursor:pointer">Stop VM</button>
+                <button id="vm-fullscreen-btn" onclick="toggleVmFullscreen()" title="Fullscreen" style="background:none;border:1px solid var(--border);color:var(--text);width:32px;height:32px;border-radius:var(--pill);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+                </button>
               </div>
             </div>
-            <div id="vm-error-box" style="display:none;background:rgba(239,68,68,0.1);border:1px solid var(--red);color:var(--red);border-radius:6px;padding:8px 12px;font-size:12px;font-family:var(--font-mono);white-space:pre-wrap;margin-bottom:12px"></div>
-            <div id="vnc-screen" style="width:100%;max-width:800px;aspect-ratio:4/3;margin:0 auto;background:#000;border:1px solid var(--border);border-radius:6px;overflow:hidden"></div>
+            <div id="vm-error-box" style="display:none;background:rgba(239,68,68,0.1);border:1px solid var(--red);color:var(--red);border-radius:12px;padding:8px 12px;font-size:12px;font-family:var(--font-mono);white-space:pre-wrap;margin-bottom:12px"></div>
+            <div id="vnc-screen" style="width:100%;max-width:800px;aspect-ratio:16/9;margin:0 auto;background:#000;border:1px solid var(--border);border-radius:12px;overflow:hidden"></div>
+          </div>
+          <div class="card">
+            <h3>Send File to VM</h3>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input id="vm-file-path" type="text" placeholder="/home/user/file.txt" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:10px;font-size:12px;outline:none">
+              <button onclick="document.getElementById('vm-file-picker').click()" title="Browse local file" style="background:none;border:1px solid var(--border);color:var(--text);width:36px;height:36px;flex-shrink:0;border-radius:10px;cursor:pointer;display:flex;align-items:center;justify-content:center">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+              </button>
+              <input id="vm-file-picker" type="file" style="display:none">
+              <button id="vm-file-send-btn" disabled onclick="sendFileToVm()" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px 18px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;opacity:0.4;pointer-events:none">Send</button>
+            </div>
+            <div id="vm-file-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+          </div>
+          <div class="card">
+            <h3>Quick VM Settings</h3>
+            <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:14px">
+              <div>
+                <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">RAM (MB)</label>
+                <select id="vm-cfg-ram" style="background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none">
+                  <option value="2048">2048</option>
+                  <option value="4096">4096</option>
+                  <option value="8192">8192</option>
+                  <option value="16384">16384</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">vCPUs</label>
+                <select id="vm-cfg-cpus" style="background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="4">4</option>
+                  <option value="6">6</option>
+                  <option value="8">8</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Disk (<span id="vm-cfg-disk-size">–</span> GB) · Grow by</label>
+                <div style="display:flex;gap:6px">
+                  <input id="vm-cfg-disk-add" type="number" min="1" value="10" style="width:70px;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:10px;font-size:12px;outline:none">
+                  <span style="font-size:12px;color:var(--muted);align-self:center">GB</span>
+                  <button onclick="growVmDisk()" style="background:none;border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:var(--pill);font-size:12px;cursor:pointer">Grow</button>
+                </div>
+              </div>
+            </div>
+            <button onclick="saveVmConfig()" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px 18px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Apply on Next Start</button>
+            <div id="vm-cfg-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
           </div>
           <div class="dash-grid" id="vm-metrics-grid" style="display:none">
             <div class="card">
@@ -685,7 +798,7 @@
     <div class="chat-panel">
       <div class="chat-header" style="cursor:pointer;user-select:none" onclick="toggleLlmConfig()">
         <div style="display:flex;align-items:center;justify-content:space-between">
-          <span>Chat · <span id="chat-agent-label" style="color:var(--accent);font-size:12px">llama2 (ollama)</span></span>
+          <span>Chat · <span id="chat-agent-label" style="color:var(--text);font-size:12px">llama2 (ollama)</span></span>
           <span id="llm-config-chevron" style="font-size:11px;color:var(--muted)">⚙ Configure</span>
         </div>
         <div id="chat-progress" style="display:none">
@@ -694,7 +807,7 @@
         </div>
       </div>
 
-      <div id="llm-config-panel" style="display:none;padding:12px;border-bottom:1px solid var(--border);background:var(--bg);flex-shrink:0">
+      <div id="llm-config-panel" style="display:none;padding:16px 20px;border-bottom:1px solid rgba(250,250,250,0.06);background:rgba(0,0,0,0.2);flex-shrink:0">
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:10px">LLM Agent</div>
 
         <div style="display:flex;gap:6px;margin-bottom:10px">
@@ -706,25 +819,25 @@
 
         <div id="llm-ollama-section">
           <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
-            <select id="llm-ollama-model" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;outline:none">
+            <select id="llm-ollama-model" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none">
               <option value="">Loading models...</option>
             </select>
-            <button onclick="refreshOllamaModels()" style="background:none;border:1px solid var(--border);color:var(--muted);padding:5px 8px;border-radius:6px;font-size:11px;cursor:pointer" title="Refresh">↻</button>
+            <button onclick="refreshOllamaModels()" style="background:none;border:1px solid var(--border);color:var(--muted);padding:5px 8px;border-radius:var(--pill);font-size:11px;cursor:pointer" title="Refresh">↻</button>
           </div>
         </div>
 
         <div id="llm-cloud-section" style="display:none">
-          <input id="llm-cloud-model" type="text" placeholder="Model name (e.g. gpt-4o)" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:12px;outline:none;margin-bottom:8px;box-sizing:border-box">
+          <input id="llm-cloud-model" type="text" placeholder="Model name (e.g. gpt-4o)" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:10px;font-size:12px;outline:none;margin-bottom:8px;box-sizing:border-box">
           <div style="position:relative">
-            <input id="llm-api-key" type="password" placeholder="API Key" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 30px 6px 8px;border-radius:6px;font-size:12px;outline:none;box-sizing:border-box">
-            <span onclick="toggleKeyVisibility()" style="position:absolute;right:8px;top:6px;cursor:pointer;font-size:12px;color:var(--muted)" title="Show/hide">👁</span>
+            <input id="llm-api-key" type="password" placeholder="API Key" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:7px 30px 7px 10px;border-radius:10px;font-size:12px;outline:none;box-sizing:border-box">
+            <span onclick="toggleKeyVisibility()" style="position:absolute;right:8px;top:7px;cursor:pointer;font-size:12px;color:var(--muted)" title="Show/hide">👁</span>
           </div>
           <div id="llm-cloud-hint" style="font-size:10px;color:var(--muted);margin-top:5px"></div>
         </div>
 
         <div style="display:flex;gap:6px;margin-top:10px">
-          <button onclick="saveLlmConfig()" style="flex:1;background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:6px;padding:7px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Apply</button>
-          <button onclick="toggleLlmConfig()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:7px 10px;font-size:12px;cursor:pointer">Cancel</button>
+          <button onclick="saveLlmConfig()" style="flex:1;background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(225,29,72,0.3)">Apply</button>
+          <button onclick="toggleLlmConfig()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:var(--pill);padding:8px 14px;font-size:12px;cursor:pointer">Cancel</button>
         </div>
         <div id="llm-config-msg" style="font-size:11px;margin-top:6px;min-height:14px"></div>
       </div>
@@ -751,6 +864,84 @@
     function switchTab(n) { document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === n)); document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${n}`)); if (n === 'vmscreen') connectVncScreen() }
     document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
 
+    function toggleVmFullscreen() {
+      const el = document.getElementById('vnc-screen');
+      if (!document.fullscreenElement) {
+        (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+      } else {
+        (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+      }
+    }
+
+    const vmFilePathInput = document.getElementById('vm-file-path');
+    const vmFilePicker = document.getElementById('vm-file-picker');
+    const vmFileSendBtn = document.getElementById('vm-file-send-btn');
+    let vmPickedFile = null;
+
+    function updateVmSendBtnState() {
+      const armed = !!vmPickedFile || vmFilePathInput.value.trim().length > 0;
+      vmFileSendBtn.disabled = !armed;
+      vmFileSendBtn.style.opacity = armed ? '1' : '0.4';
+      vmFileSendBtn.style.pointerEvents = armed ? 'auto' : 'none';
+    }
+    vmFilePathInput.addEventListener('input', () => { vmPickedFile = null; updateVmSendBtnState() });
+    vmFilePicker.addEventListener('change', () => {
+      vmPickedFile = vmFilePicker.files[0] || null;
+      if (vmPickedFile) vmFilePathInput.value = vmPickedFile.name;
+      updateVmSendBtnState();
+    });
+
+    function sendFileToVm() {
+      const statusEl = document.getElementById('vm-file-status');
+      vmFileSendBtn.disabled = true;
+      statusEl.style.color = 'var(--muted)';
+      statusEl.textContent = 'Sending...';
+      const req = vmPickedFile
+        ? fetch('/api/vm/send-file', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': vmPickedFile.name }, body: vmPickedFile })
+        : fetch('/api/vm/send-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: vmFilePathInput.value.trim() }) });
+      req.then(r => r.json()).then(d => {
+        if (d.error) { statusEl.style.color = 'var(--red)'; statusEl.textContent = d.error }
+        else if (d.auto_mounted) { statusEl.style.color = 'var(--green)'; statusEl.textContent = `Sent. "${d.filename}" will appear automatically at /mnt/shared/${d.filename} inside the VM.` }
+        else { statusEl.style.color = 'var(--green)'; statusEl.textContent = `Sent "${d.filename}" to the shared folder. Inside the VM (one-time): ${d.mount_hint}, then find it at /mnt/shared/${d.filename}` }
+        updateVmSendBtnState();
+      }).catch(() => { statusEl.style.color = 'var(--red)'; statusEl.textContent = 'Failed to send.'; updateVmSendBtnState() });
+    }
+
+    function loadVmConfig() {
+      fetch('/api/vm/config').then(r => r.json()).then(cfg => {
+        document.getElementById('vm-cfg-ram').value = cfg.ram_mb;
+        document.getElementById('vm-cfg-cpus').value = cfg.cpus;
+        document.getElementById('vm-cfg-disk-size').textContent = cfg.disk_size_gb ?? '–';
+      }).catch(() => {});
+    }
+    loadVmConfig();
+
+    function saveVmConfig() {
+      const statusEl = document.getElementById('vm-cfg-status');
+      const ram_mb = parseInt(document.getElementById('vm-cfg-ram').value, 10);
+      const cpus = parseInt(document.getElementById('vm-cfg-cpus').value, 10);
+      statusEl.style.color = 'var(--muted)'; statusEl.textContent = 'Saving...';
+      fetch('/api/vm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ram_mb, cpus }) })
+        .then(r => r.json()).then(d => {
+          if (d.error) { statusEl.style.color = 'var(--red)'; statusEl.textContent = d.error }
+          else { statusEl.style.color = 'var(--green)'; statusEl.textContent = 'Saved. Takes effect on the next Start VM.' }
+        }).catch(() => { statusEl.style.color = 'var(--red)'; statusEl.textContent = 'Failed to save.' });
+    }
+
+    function growVmDisk() {
+      const statusEl = document.getElementById('vm-cfg-status');
+      const add_gb = parseInt(document.getElementById('vm-cfg-disk-add').value, 10);
+      statusEl.style.color = 'var(--muted)'; statusEl.textContent = 'Growing disk...';
+      fetch('/api/vm/disk-grow', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ add_gb }) })
+        .then(r => r.json()).then(d => {
+          if (d.error) { statusEl.style.color = 'var(--red)'; statusEl.textContent = d.error }
+          else {
+            statusEl.style.color = 'var(--green)'; statusEl.textContent = `Disk grown to ${d.disk_size_gb} GB. ${d.note}`;
+            document.getElementById('vm-cfg-disk-size').textContent = d.disk_size_gb;
+          }
+        }).catch(() => { statusEl.style.color = 'var(--red)'; statusEl.textContent = 'Failed to grow disk.' });
+    }
+
     let vncRfb = null;
     function connectVncScreen() {
       if (vncRfb) return;
@@ -760,7 +951,7 @@
       import('/novnc/core/rfb.js').then(({ default: RFB }) => {
         vncRfb = new RFB(container, `ws://${location.hostname}:6080/websockify`);
         vncRfb.scaleViewport = true;
-        vncRfb.resizeSession = true;
+        vncRfb.resizeSession = false;
         vncRfb.addEventListener('connect', () => statusEl.textContent = 'connected');
         vncRfb.addEventListener('disconnect', () => { statusEl.textContent = 'disconnected'; vncRfb = null });
       }).catch(() => { statusEl.textContent = 'unavailable'; vncRfb = null });
@@ -829,12 +1020,12 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       eventTimeline.forEach(t => { const age = now - t; if (age < span) { const idx = Math.min(bCount - 1, Math.floor((span - age) / bSize)); buckets[idx]++ } });
       const max = Math.max(...buckets, 1);
       const bw = (w - 40) / bCount;
-      ctx.fillStyle = 'rgba(0,184,217,0.15)'; ctx.strokeStyle = 'rgba(0,184,217,0.6)'; ctx.lineWidth = 1.5;
+      ctx.fillStyle = 'rgba(225,29,72,0.18)'; ctx.strokeStyle = 'rgba(225,29,72,0.75)'; ctx.lineWidth = 1.5;
       ctx.beginPath();
       buckets.forEach((v, i) => { const x = 20 + i * bw + bw / 2, y = h - 20 - (v / max) * (h - 40); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y) });
       ctx.stroke();
       ctx.lineTo(20 + (bCount - 1) * bw + bw / 2, h - 20); ctx.lineTo(20 + bw / 2, h - 20); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = 'var(--muted)'; ctx.font = '10px -apple-system, BlinkMacSystemFont, sans-serif'; ctx.fillText('5m ago', 20, h - 6); ctx.fillText('now', w - 30, h - 6);
+      ctx.fillStyle = 'var(--muted)'; ctx.font = '10px "SF Pro Text", -apple-system, sans-serif'; ctx.fillText('5m ago', 20, h - 6); ctx.fillText('now', w - 30, h - 6);
     }
 
     function drawSources() {
@@ -843,13 +1034,13 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       const w = c.offsetWidth, h = 180, cx = w / 2, cy = h / 2 - 5, r = 60;
       ctx.clearRect(0, 0, w, h);
       const total = ebpfCount + networkCount; if (total === 0) return;
-      const slices = [{ v: ebpfCount, c: '#22C55E', l: 'eBPF' }, { v: networkCount, c: '#00B8D9', l: 'Network' }];
+      const slices = [{ v: ebpfCount, c: '#22C55E', l: 'eBPF' }, { v: networkCount, c: '#E11D48', l: 'Network' }];
       let angle = -Math.PI / 2;
       slices.forEach(s => { const a = s.v / total * Math.PI * 2; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, angle, angle + a); ctx.fillStyle = s.c; ctx.fill(); angle += a });
       ctx.fillStyle = 'var(--bg)'; ctx.beginPath(); ctx.arc(cx, cy, 35, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = 'var(--text)'; ctx.font = 'bold 14px ui-monospace, SFMono-Regular, Menlo, monospace'; ctx.textAlign = 'center'; ctx.fillText(total, cx, cy + 5);
+      ctx.fillStyle = 'var(--text)'; ctx.font = 'bold 14px "SF Mono", ui-monospace, Menlo, monospace'; ctx.textAlign = 'center'; ctx.fillText(total, cx, cy + 5);
       let ly = h - 20;
-      slices.forEach(s => { ctx.fillStyle = s.c; ctx.fillRect(cx - 60, ly - 8, 10, 10); ctx.fillStyle = 'var(--text)'; ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif'; ctx.textAlign = 'left'; ctx.fillText(`${s.l}: ${s.v}`, cx - 44, ly); ly += 16 });
+      slices.forEach(s => { ctx.fillStyle = s.c; ctx.fillRect(cx - 60, ly - 8, 10, 10); ctx.fillStyle = 'var(--text)'; ctx.font = '11px "SF Pro Text", -apple-system, sans-serif'; ctx.textAlign = 'left'; ctx.fillText(`${s.l}: ${s.v}`, cx - 44, ly); ly += 16 });
     }
 
     function drawMetricChart(canvasId, values, strokeColor, fillColor, label, unit, minMax) {
@@ -871,12 +1062,13 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       if (isDemoMode) return;
       fetch('/api/vm/metrics').then(r => r.json()).then(m => {
         drawMetricChart('chart-vm-cpu', m.cpu || [], 'rgba(245,158,11,0.8)', 'rgba(245,158,11,0.15)', 'vm-cpu-label', '%', 100);
-        drawMetricChart('chart-vm-mem', m.mem_mb || [], 'rgba(77,168,255,0.8)', 'rgba(77,168,255,0.15)', 'vm-mem-label', ' MB', 512);
+        drawMetricChart('chart-vm-mem', m.mem_mb || [], 'rgba(251,113,133,0.85)', 'rgba(251,113,133,0.18)', 'vm-mem-label', ' MB', 512);
       }).catch(() => {});
     }
 
     function updateStatus(s) {
       isDemoMode = !!s.demo_mode;
+      if (isDemoMode) { document.getElementById('chat-agent-label').textContent = 'Opus 5' }
       if (isDemoMode && !demoChatRendered) { renderDemoChat(); demoChatRendered = true }
       document.getElementById('stat-events').textContent = s.total_events;
       document.getElementById('stat-batches').textContent = s.batch_count;
@@ -911,12 +1103,21 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       prevVmRunning = s.vm_running;
     }
 
+    function severityDotClass(response) {
+      const m = response && response.match(/SEVERITY:\s*([1-5])/i);
+      if (!m) return '';
+      const sev = parseInt(m[1], 10);
+      const tier = sev === 1 ? 'sev-low' : sev <= 3 ? 'sev-mid' : 'sev-high';
+      return `<span class="sev-dot ${tier}" title="Severity ${sev}"></span>`;
+    }
+
     function renderBatchList() {
       if (!batches.length) { batchListEl.innerHTML = '<div class="empty-state" style="padding:24px"><span style="font-size:13px">No batches yet</span></div>'; return }
       batchListEl.innerHTML = batches.map(b => {
         const sc = b.status === 'complete' ? 'status-complete' : b.status === 'analyzing' ? 'status-analyzing' : b.status === 'queued' ? 'status-queued' : 'status-error';
         const ic = b.status === 'complete' ? '✓' : b.status === 'analyzing' ? '⟳' : b.status === 'queued' ? '◎' : '✗';
-        return `<div class="batch-item ${b.id === activeBatchId ? 'active' : ''}" onclick="selectBatch(${b.id})"><div class="batch-id">Batch #${b.id}</div><div class="batch-meta">${b.event_count} events · ${timeAgo(b.timestamp)}</div><div class="batch-status ${sc}">${ic} ${b.status}${b.duration ? ' · ' + b.duration + 's' : ''}</div></div>`
+        const sevDot = severityDotClass(b.response);
+        return `<div class="batch-item ${b.id === activeBatchId ? 'active' : ''}" onclick="selectBatch(${b.id})"><div style="display:flex;align-items:center;justify-content:space-between"><div class="batch-id">Batch #${b.id}</div>${sevDot}</div><div class="batch-meta">${b.event_count} events · ${timeAgo(b.timestamp)}</div><div class="batch-status ${sc}">${ic} ${b.status}${b.duration ? ' · ' + b.duration + 's' : ''}</div></div>`
       }).join('');
     }
 
@@ -951,7 +1152,7 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     });
     evtSource.addEventListener('analysis_done', e => {
       const d = JSON.parse(e.data); const idx = batches.findIndex(b => b.id === d.batch_id);
-      if (idx >= 0) { batches[idx].status = d.status; batches[idx].duration = d.duration; batches[idx].tokens = d.tokens } renderBatchList();
+      if (idx >= 0) { batches[idx].status = d.status; batches[idx].duration = d.duration; batches[idx].tokens = d.tokens; batches[idx].response = d.response } renderBatchList();
     });
     evtSource.addEventListener('analysis_start', () => { });
     evtSource.addEventListener('chat_token', e => { const d = JSON.parse(e.data); if (currentChatBotMsg) currentChatBotMsg.textContent += d.token; chatMessages.scrollTop = chatMessages.scrollHeight });
@@ -1024,7 +1225,7 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     }
 
     function updateAgentLabel(provider, model) {
-      document.getElementById('chat-agent-label').textContent = `${model} (${provider})`;
+      document.getElementById('chat-agent-label').textContent = isDemoMode ? 'Opus 5' : `${model} (${provider})`;
     }
 
     fetch('/api/llm/config').then(r => r.json()).then(cfg => {

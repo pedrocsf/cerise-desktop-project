@@ -38,6 +38,8 @@ DEMO_MODE = os.environ.get("MALTRACE_DEMO") == "1"
 QEMU_PID_FILE = "qemu_vm.pid"
 VM_METRICS_MAXLEN = 90
 VM_METRICS_INTERVAL = 2
+VM_QCOW2_PATH = "/home/pedro/Downloads/cerise.qcow2"
+VM_SHARED_DIRNAME = "vm_shared"
 
 
 class PipelineState:
@@ -84,6 +86,7 @@ class PipelineState:
             "model": "llama2",
             "api_key": "",
         }
+        self.vm_config = {"ram_mb": 8192, "cpus": 6}
 
     def get_status(self):
         with self.lock:
@@ -172,10 +175,23 @@ def spawn_ttyd():
     if not ttyd_bin:
         print("[pipeline_web] Warning: ttyd not installed, host terminal panel will be unavailable")
         return None
+    theme = json.dumps({
+        "background": "#000000",
+        "foreground": "#ffffff",
+        "cursor": "#ffffff",
+        "cursorAccent": "#000000",
+        "selectionBackground": "#ffffff",
+        "selectionForeground": "#000000",
+        "black": "#000000",
+        "white": "#ffffff",
+        "brightBlack": "#000000",
+        "brightWhite": "#ffffff",
+    })
     cmd = [
         ttyd_bin,
         "-p", str(TTYD_PORT),
         "-i", TTYD_HOST,
+        "-t", f"theme={theme}",
         "-W",
         "bash",
     ]
@@ -235,6 +251,10 @@ def stop_listeners():
 def run_vm_controller(action):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     binary_path = os.path.join(script_dir, VM_CONTROLLER_BIN)
+    env = os.environ.copy()
+    with state.lock:
+        env["CERISE_RAM_MB"] = str(state.vm_config["ram_mb"])
+        env["CERISE_CPUS"] = str(state.vm_config["cpus"])
     try:
         result = subprocess.run(
             [binary_path, action],
@@ -242,11 +262,56 @@ def run_vm_controller(action):
             capture_output=True,
             text=True,
             timeout=VM_ACTION_TIMEOUT,
+            env=env,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         return False, str(e)
     output = (result.stdout + result.stderr).strip()
     return result.returncode == 0, output
+
+
+def get_disk_size_gb():
+    try:
+        result = subprocess.run(
+            ["qemu-img", "info", "--output=json", VM_QCOW2_PATH],
+            capture_output=True, text=True, timeout=10,
+        )
+        info = json.loads(result.stdout)
+        return round(info["virtual-size"] / (1024 ** 3), 1)
+    except Exception:
+        return None
+
+
+GUEST_AUTOMOUNT_MARKER = ".guest_automount_configured"
+
+
+def ensure_guest_automount():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    marker_path = os.path.join(script_dir, GUEST_AUTOMOUNT_MARKER)
+    if os.path.exists(marker_path):
+        return True
+    virt_customize = shutil.which("virt-customize")
+    if not virt_customize:
+        print("[pipeline_web] virt-customize not installed, skipping guest auto-mount setup")
+        return False
+    print("[pipeline_web] Configuring guest auto-mount for the shared folder (one-time, VM disk offline)...")
+    try:
+        result = subprocess.run(
+            [virt_customize, "-a", VM_QCOW2_PATH,
+             "--run-command", "mkdir -p /mnt/shared",
+             "--append-line", "/etc/fstab:cerise_share /mnt/shared 9p trans=virtio,version=9p2000.L,rw,_netdev,nofail 0 0"],
+            capture_output=True, text=True, timeout=300,
+        )
+    except Exception as e:
+        print(f"[pipeline_web] Guest auto-mount setup failed: {e}")
+        return False
+    if result.returncode != 0:
+        print(f"[pipeline_web] Guest auto-mount setup failed: {(result.stdout + result.stderr).strip()}")
+        return False
+    with open(marker_path, "w") as f:
+        f.write("1")
+    print("[pipeline_web] Guest auto-mount configured: shared folder will appear at /mnt/shared inside the VM")
+    return True
 
 
 def vm_is_active():
@@ -315,6 +380,8 @@ def vm_start_worker():
         state.vm_busy = True
         state.vm_last_error = ""
     broadcast_sse("vm_status", {"vm_running": False, "vm_busy": True})
+
+    ensure_guest_automount()
 
     ok, output = run_vm_controller("start")
     if ok:
@@ -754,6 +821,7 @@ def run_analysis(batch):
             "status": batch["status"],
             "duration": duration,
             "tokens": batch["tokens"],
+            "response": batch["response"],
             "factual_warnings": batch["factual_warnings"]
         })
 
@@ -823,6 +891,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     "status": b["status"],
                     "duration": b.get("duration", 0),
                     "tokens": b.get("tokens", 0),
+                    "response": b.get("response", ""),
                 } for b in state.batches]
             self.send_json(batch_list)
         elif self.path.startswith("/api/batch/"):
@@ -853,13 +922,19 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     "cpu": list(state.vm_metrics["cpu"]),
                     "mem_mb": list(state.vm_metrics["mem_mb"]),
                 })
+        elif self.path == "/api/vm/config":
+            with state.lock:
+                cfg = dict(state.vm_config)
+                cfg["vm_running"] = state.vm_running
+            cfg["disk_size_gb"] = get_disk_size_gb()
+            self.send_json(cfg)
         elif self.path == "/api/stream":
             self.handle_sse()
         elif self.path.startswith("/api/files"):
             self.handle_files()
         elif self.path.startswith("/api/file?"):
             self.handle_file_content()
-        elif self.path.endswith(".png"):
+        elif self.path.endswith(".png") or self.path.endswith(".svg"):
             self.serve_static_png()
         elif self.path.startswith("/novnc/"):
             self.serve_novnc_file()
@@ -912,9 +987,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             broadcast_sse("llm_config", {"provider": provider, "model": model})
             self.send_json({"status": "ok", "provider": provider, "model": model})
         elif self.path == "/api/vm/start":
-            if DEMO_MODE:
-                self.send_json({"error": "VM control disabled in demo mode"}, 403)
-                return
             with state.lock:
                 busy, running = state.vm_busy, state.vm_running
             if busy or running:
@@ -923,9 +995,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 threading.Thread(target=vm_start_worker, daemon=True).start()
                 self.send_json({"status": "starting"})
         elif self.path == "/api/vm/stop":
-            if DEMO_MODE:
-                self.send_json({"error": "VM control disabled in demo mode"}, 403)
-                return
             with state.lock:
                 busy, running = state.vm_busy, state.vm_running
             if busy or not running:
@@ -933,6 +1002,95 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             else:
                 threading.Thread(target=vm_stop_worker, daemon=True).start()
                 self.send_json({"status": "stopping"})
+        elif self.path == "/api/vm/config":
+            try:
+                data = self._read_json_body()
+                ram_mb = int(data.get("ram_mb"))
+                cpus = int(data.get("cpus"))
+            except Exception:
+                self.send_json({"error": "ram_mb and cpus must be integers"}, 400)
+                return
+            if not (512 <= ram_mb <= 32768):
+                self.send_json({"error": "ram_mb out of range (512-32768)"}, 400)
+                return
+            if not (1 <= cpus <= 16):
+                self.send_json({"error": "cpus out of range (1-16)"}, 400)
+                return
+            with state.lock:
+                state.vm_config["ram_mb"] = ram_mb
+                state.vm_config["cpus"] = cpus
+            self.send_json({"status": "ok", "ram_mb": ram_mb, "cpus": cpus})
+        elif self.path == "/api/vm/disk-grow":
+            try:
+                add_gb = int(self._read_json_body().get("add_gb"))
+            except Exception:
+                self.send_json({"error": "add_gb must be an integer"}, 400)
+                return
+            if not (1 <= add_gb <= 500):
+                self.send_json({"error": "add_gb out of range (1-500)"}, 400)
+                return
+            with state.lock:
+                running = state.vm_running
+            if running:
+                self.send_json({"error": "Stop the VM before resizing its disk"}, 409)
+                return
+            try:
+                result = subprocess.run(
+                    ["qemu-img", "resize", VM_QCOW2_PATH, f"+{add_gb}G"],
+                    capture_output=True, text=True, timeout=30,
+                )
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            if result.returncode != 0:
+                self.send_json({"error": (result.stdout + result.stderr).strip()}, 500)
+                return
+            self.send_json({
+                "status": "ok",
+                "disk_size_gb": get_disk_size_gb(),
+                "note": "Grow the guest partition/filesystem from inside the VM to use the new space",
+            })
+        elif self.path == "/api/vm/send-file":
+            content_type = self.headers.get("Content-Type", "")
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            shared_dir = os.path.join(script_dir, VM_SHARED_DIRNAME)
+            os.makedirs(shared_dir, exist_ok=True)
+            if content_type.startswith("application/json"):
+                try:
+                    data = self._read_json_body()
+                except Exception:
+                    self.send_json({"error": "Invalid JSON"}, 400)
+                    return
+                src_path = (data.get("path") or "").strip()
+                if not src_path or not os.path.isfile(src_path):
+                    self.send_json({"error": "File not found on host"}, 400)
+                    return
+                filename = os.path.basename(src_path)
+                try:
+                    with open(src_path, "rb") as f:
+                        content = f.read()
+                except Exception as e:
+                    self.send_json({"error": str(e)}, 500)
+                    return
+            else:
+                filename = os.path.basename((self.headers.get("X-Filename") or "").strip())
+                length = int(self.headers.get("Content-Length") or 0)
+                content = self.rfile.read(length)
+            if not filename or not content:
+                self.send_json({"error": "Missing file"}, 400)
+                return
+            try:
+                with open(os.path.join(shared_dir, filename), "wb") as f:
+                    f.write(content)
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            self.send_json({
+                "status": "ok",
+                "filename": filename,
+                "auto_mounted": os.path.exists(os.path.join(script_dir, GUEST_AUTOMOUNT_MARKER)),
+                "mount_hint": "sudo mkdir -p /mnt/shared && sudo mount -t 9p -o trans=virtio,version=9p2000.L cerise_share /mnt/shared",
+            })
         else:
             self.send_error(404)
     def handle_export_zip(self):
@@ -1034,15 +1192,16 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def serve_static_png(self):
         script_dir = os.path.dirname(os.path.abspath(__file__))
         filename = os.path.basename(self.path)
-        png_path = os.path.abspath(os.path.join(script_dir, filename))
-        if not png_path.startswith(script_dir) or not os.path.exists(png_path):
+        file_path = os.path.abspath(os.path.join(script_dir, filename))
+        if not file_path.startswith(script_dir) or not os.path.exists(file_path):
             self.send_error(404)
             return
+        content_type = "image/svg+xml" if filename.endswith(".svg") else "image/png"
         try:
-            with open(png_path, "rb") as f:
+            with open(file_path, "rb") as f:
                 content = f.read()
             self.send_response(200)
-            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", len(content))
             self.end_headers()
             self.wfile.write(content)

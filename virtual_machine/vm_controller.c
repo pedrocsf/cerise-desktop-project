@@ -6,16 +6,19 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 #define QEMU_PID_FILE "qemu_vm.pid"
 #define SERIAL_PORTS_FILE "serial_ports.list"
+#define VM_SHARED_DIR "/home/pedro/Github/cerise-desktop-project/virtual_machine/vm_shared"
 
-#define QEMU_COMMAND "qemu-system-x86_64 "                                                    \
-                     "-m 8192 "                                                               \
-                     "-smp 6 "                                                                \
+#define QEMU_COMMAND_FMT "qemu-system-x86_64 "                                                \
+                     "-m %d "                                                                 \
+                     "-smp %d "                                                               \
                      "-machine q35,accel=kvm "                                                \
                      "-cpu host "                                                             \
                      "-drive file=/home/pedro/Downloads/cerise.qcow2,format=qcow2,cache=writeback " \
+                     "-virtfs local,path=" VM_SHARED_DIR ",mount_tag=cerise_share,security_model=mapped-xattr,id=cerise_share " \
                      "-netdev user,id=net0,hostfwd=tcp::2222-:22 "                            \
                      "-device e1000,netdev=net0 "                                             \
                      "-device virtio-serial-pci,max_ports=16 "                                \
@@ -43,7 +46,7 @@
                      "-device virtserialport,chardev=ch11,name=com.cerise.ch11 "              \
                      "-vnc 127.0.0.1:0 "                                                      \
                      "-vga none "                                                             \
-                     "-device virtio-vga,xres=1024,yres=768 "                                 \
+                     "-device virtio-vga,xres=1280,yres=720 "                                 \
                      "-daemonize "                                                            \
                      "-pidfile " QEMU_PID_FILE " "                                            \
                      "-enable-kvm"
@@ -158,9 +161,30 @@ int start_qemu_vm()
 
     printf("Starting QEMU VM...\n\n");
 
+    mkdir(VM_SHARED_DIR, 0755);
+
+    int ram_mb = 8192, cpus = 6;
+    const char *ram_env = getenv("CERISE_RAM_MB");
+    const char *cpus_env = getenv("CERISE_CPUS");
+    if (ram_env)
+    {
+        int v = atoi(ram_env);
+        if (v >= 512 && v <= 32768)
+            ram_mb = v;
+    }
+    if (cpus_env)
+    {
+        int v = atoi(cpus_env);
+        if (v >= 1 && v <= 16)
+            cpus = v;
+    }
+
+    char qemu_cmd[8192];
+    snprintf(qemu_cmd, sizeof(qemu_cmd), QEMU_COMMAND_FMT, ram_mb, cpus);
+
     /* Redirect stderr to stdout so we can capture chardev pty assignments */
-    char cmd_with_redirect[8192];
-    snprintf(cmd_with_redirect, sizeof(cmd_with_redirect), "%s 2>&1", QEMU_COMMAND);
+    char cmd_with_redirect[8224];
+    snprintf(cmd_with_redirect, sizeof(cmd_with_redirect), "%s 2>&1", qemu_cmd);
 
     FILE *fp = popen(cmd_with_redirect, "r");
     if (!fp)

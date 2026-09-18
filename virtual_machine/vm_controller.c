@@ -15,7 +15,7 @@
                      "-smp 6 "                                                                \
                      "-machine q35,accel=kvm "                                                \
                      "-cpu host "                                                             \
-                     "-drive file=/home/pacto/malware_vm.qcow2,format=qcow2,cache=writeback " \
+                     "-drive file=/home/pedro/Downloads/cerise.qcow2,format=qcow2,cache=writeback " \
                      "-netdev user,id=net0,hostfwd=tcp::2222-:22 "                            \
                      "-device e1000,netdev=net0 "                                             \
                      "-device virtio-serial-pci,max_ports=16 "                                \
@@ -41,11 +41,15 @@
                      "-device virtserialport,chardev=ch10,name=com.cerise.ch10 "              \
                      "-chardev pty,id=ch11 "                                                  \
                      "-device virtserialport,chardev=ch11,name=com.cerise.ch11 "              \
+                     "-vnc 127.0.0.1:0 "                                                      \
+                     "-vga none "                                                             \
+                     "-device virtio-vga,xres=1024,yres=768 "                                 \
                      "-daemonize "                                                            \
                      "-pidfile " QEMU_PID_FILE " "                                            \
                      "-enable-kvm"
 
 pid_t qemu_pid = 0;
+int g_interactive = 1;
 
 /* Global storage for captured chardev pty ports */
 #define MAX_PORTS 16
@@ -57,15 +61,15 @@ void clear_screen();
 void pause_screen();
 void show_header(const char *title);
 
-void start_qemu_vm();
-void stop_qemu_vm();
-void check_qemu_status();
+int start_qemu_vm();
+int stop_qemu_vm();
+int check_qemu_status();
 void show_serial_ports();
 void cleanup_and_exit(int signum);
 void load_pid_from_file();
 void save_ports_to_file(void);
 
-int main()
+int main(int argc, char *argv[])
 {
     int choice;
 
@@ -73,6 +77,24 @@ int main()
     signal(SIGTERM, cleanup_and_exit);
 
     load_pid_from_file();
+
+    if (argc > 1)
+    {
+        g_interactive = 0;
+        int ok;
+        if (strcmp(argv[1], "start") == 0)
+            ok = start_qemu_vm();
+        else if (strcmp(argv[1], "stop") == 0)
+            ok = stop_qemu_vm();
+        else if (strcmp(argv[1], "status") == 0)
+            ok = check_qemu_status();
+        else
+        {
+            fprintf(stderr, "Usage: %s [start|stop|status]\n", argv[0]);
+            return 1;
+        }
+        return ok ? 0 : 1;
+    }
 
     while (1)
     {
@@ -123,7 +145,7 @@ int main()
     return 0;
 }
 
-void start_qemu_vm()
+int start_qemu_vm()
 {
     show_header("Start QEMU VM");
 
@@ -131,7 +153,7 @@ void start_qemu_vm()
     {
         printf("QEMU VM is already running (PID: %d).\n", qemu_pid);
         pause_screen();
-        return;
+        return 1;
     }
 
     printf("Starting QEMU VM...\n\n");
@@ -146,7 +168,7 @@ void start_qemu_vm()
         printf("\n[ERROR] Failed to start QEMU VM.\n");
         printf("Check if QEMU is installed and the disk image 'malware_vm.qcow2' exists.\n");
         pause_screen();
-        return;
+        return 0;
     }
 
     /* Parse output lines looking for pty redirections */
@@ -177,7 +199,7 @@ void start_qemu_vm()
         printf("\n[ERROR] Failed to start QEMU VM (exit code %d).\n", ret);
         printf("Check if QEMU is installed and the disk image 'malware_vm.qcow2' exists.\n");
         pause_screen();
-        return;
+        return 0;
     }
 
     sleep(2);
@@ -190,6 +212,8 @@ void start_qemu_vm()
     else
     {
         printf("\n[ERROR] VM may have started, but could not read its PID.\n");
+        pause_screen();
+        return 0;
     }
 
     if (g_port_count > 0)
@@ -207,24 +231,30 @@ void start_qemu_vm()
     else
     {
         printf("  [WARN] No chardev pty ports detected in QEMU output.\n\n");
+        pause_screen();
+        return 0;
     }
 
     pause_screen();
+    return 1;
 }
 
-void stop_qemu_vm()
+int stop_qemu_vm()
 {
     show_header("Stop QEMU VM");
     if (qemu_pid <= 0 || kill(qemu_pid, 0) != 0)
     {
         printf("QEMU VM is not running.\n");
         qemu_pid = 0;
+        remove(QEMU_PID_FILE);
+        remove(SERIAL_PORTS_FILE);
         pause_screen();
-        return;
+        return 1;
     }
 
     printf("Stopping QEMU VM (PID: %d)...\n", qemu_pid);
-    if (kill(qemu_pid, SIGTERM) == 0)
+    int stopped = kill(qemu_pid, SIGTERM) == 0;
+    if (stopped)
     {
         waitpid(qemu_pid, NULL, 0);
         printf("QEMU VM stopped.\n");
@@ -238,12 +268,14 @@ void stop_qemu_vm()
     remove(QEMU_PID_FILE);
     remove(SERIAL_PORTS_FILE);
     pause_screen();
+    return stopped;
 }
 
-void check_qemu_status()
+int check_qemu_status()
 {
     show_header("VM Status");
-    if (qemu_pid > 0 && kill(qemu_pid, 0) == 0)
+    int active = qemu_pid > 0 && kill(qemu_pid, 0) == 0;
+    if (active)
     {
         printf("  [ACTIVE] QEMU VM is running (PID: %d)\n", qemu_pid);
     }
@@ -257,6 +289,7 @@ void check_qemu_status()
         }
     }
     pause_screen();
+    return active;
 }
 
 void show_serial_ports()
@@ -338,6 +371,8 @@ void clear_screen()
 
 void pause_screen()
 {
+    if (!g_interactive)
+        return;
     printf("\nPress ENTER to continue...");
     int c;
     while ((c = getchar()) != '\n' && c != EOF)
@@ -350,6 +385,8 @@ void pause_screen()
 
 void show_header(const char *title)
 {
+    if (!g_interactive)
+        return;
     clear_screen();
     printf("--- %s ---\n\n", title);
 }

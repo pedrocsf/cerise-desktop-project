@@ -14,6 +14,9 @@ import socketserver
 import pathlib
 import zipfile
 import io
+import mimetypes
+import shutil
+import collections
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block, build_process_tree_block
@@ -23,6 +26,18 @@ BATCH_INTERVAL = 30
 OLLAMA_URL = "http://localhost:11434"
 WEB_HOST = "0.0.0.0"
 WEB_PORT = 8080
+VNC_HOST = "127.0.0.1"
+VNC_PORT = 5900
+NOVNC_WS_PORT = 6080
+NOVNC_DIR = "novnc"
+TTYD_HOST = "127.0.0.1"
+TTYD_PORT = 7682
+VM_CONTROLLER_BIN = "vm_controller"
+VM_ACTION_TIMEOUT = 30
+DEMO_MODE = os.environ.get("MALTRACE_DEMO") == "1"
+QEMU_PID_FILE = "qemu_vm.pid"
+VM_METRICS_MAXLEN = 90
+VM_METRICS_INTERVAL = 2
 
 
 class PipelineState:
@@ -34,6 +49,17 @@ class PipelineState:
         self.supervisor_procs = []
         self.host_running = False
         self.supervisor_running_count = 0
+        self.vnc_proc = None
+        self.vnc_running = False
+        self.ttyd_proc = None
+        self.vm_running = False
+        self.vm_busy = False
+        self.vm_last_error = ""
+        self.vm_metrics = {
+            "timestamps": collections.deque(maxlen=VM_METRICS_MAXLEN),
+            "cpu": collections.deque(maxlen=VM_METRICS_MAXLEN),
+            "mem_mb": collections.deque(maxlen=VM_METRICS_MAXLEN),
+        }
         self.events = []
         self.current_batch = []
         self.batches = []
@@ -86,6 +112,12 @@ class PipelineState:
                 "llm_model": self.llm_config["model"],
                 "rag_ready": rag_ready.is_set() and rag_retriever is not None,
                 "hyde_degraded_count": self.hyde_degraded_count,
+                "vnc_running": self.vnc_running,
+                "vnc_ws_port": NOVNC_WS_PORT,
+                "vm_running": self.vm_running,
+                "vm_busy": self.vm_busy,
+                "vm_last_error": self.vm_last_error,
+                "demo_mode": DEMO_MODE,
             }
 
 
@@ -99,17 +131,13 @@ def load_ports():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     ports_path = os.path.join(script_dir, SERIAL_PORTS_FILE)
     if not os.path.exists(ports_path):
-        print(f"[pipeline_web] Error: {ports_path} not found. Start VM via vm_controller first.")
-        sys.exit(1)
+        return []
     entries = []
     with open(ports_path, "r") as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) == 2:
                 entries.append((parts[0], parts[1]))
-    if not entries:
-        print("[pipeline_web] Error: No ports found in serial_ports.list")
-        sys.exit(1)
     return entries
 
 
@@ -122,6 +150,211 @@ def spawn_process(binary_name, ports):
     cmd = [binary_path] + ports
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
     return proc
+
+
+def spawn_websockify():
+    websockify_bin = shutil.which("websockify") or os.path.join(os.path.dirname(sys.executable), "websockify")
+    cmd = [
+        websockify_bin,
+        str(NOVNC_WS_PORT),
+        f"{VNC_HOST}:{VNC_PORT}",
+    ]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        print("[pipeline_web] Warning: websockify not installed, VM screen panel will be unavailable")
+        return None
+    return proc
+
+
+def spawn_ttyd():
+    ttyd_bin = shutil.which("ttyd")
+    if not ttyd_bin:
+        print("[pipeline_web] Warning: ttyd not installed, host terminal panel will be unavailable")
+        return None
+    cmd = [
+        ttyd_bin,
+        "-p", str(TTYD_PORT),
+        "-i", TTYD_HOST,
+        "-W",
+        "bash",
+    ]
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def start_listeners(entries):
+    with state.lock:
+        if state.host_running or state.supervisor_running_count > 0:
+            return
+        state.ports = [path for _, path in entries]
+        state.host_ports = []
+        state.supervisor_ports = []
+        for label, path in entries:
+            num = int("".join(filter(str.isdigit, label)) or "0")
+            if num >= 10:
+                state.supervisor_ports.append(path)
+            else:
+                state.host_ports.append(path)
+
+    if state.host_ports:
+        proc = spawn_process("host_listener", state.host_ports)
+        if proc:
+            state.host_proc = proc
+            state.host_running = True
+            print(f"[pipeline_web] host_listener spawned (PID {proc.pid})")
+            threading.Thread(target=reader_thread, args=(proc, "ebpf", False), daemon=True).start()
+
+    if state.supervisor_ports:
+        for sp in state.supervisor_ports:
+            proc = spawn_process("supervisor_listener", [sp])
+            if proc:
+                state.supervisor_procs.append(proc)
+                state.supervisor_running_count += 1
+                print(f"[pipeline_web] supervisor_listener spawned on {sp} (PID {proc.pid})")
+                threading.Thread(target=reader_thread, args=(proc, "network", True), daemon=True).start()
+
+
+def stop_listeners():
+    procs = [state.host_proc] + state.supervisor_procs
+    for proc in procs:
+        if proc:
+            proc.terminate()
+    for proc in procs:
+        if proc:
+            proc.wait()
+    with state.lock:
+        state.host_proc = None
+        state.supervisor_procs = []
+        state.host_running = False
+        state.supervisor_running_count = 0
+        state.host_ports = []
+        state.supervisor_ports = []
+        state.ports = []
+
+
+def run_vm_controller(action):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    binary_path = os.path.join(script_dir, VM_CONTROLLER_BIN)
+    try:
+        result = subprocess.run(
+            [binary_path, action],
+            cwd=script_dir,
+            capture_output=True,
+            text=True,
+            timeout=VM_ACTION_TIMEOUT,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+    output = (result.stdout + result.stderr).strip()
+    return result.returncode == 0, output
+
+
+def vm_is_active():
+    ok, output = run_vm_controller("status")
+    return ok and "[ACTIVE]" in output
+
+
+def read_qemu_pid():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    pid_path = os.path.join(script_dir, QEMU_PID_FILE)
+    try:
+        with open(pid_path) as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def sample_qemu_proc(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            fields = f.read().split()
+        utime, stime = int(fields[13]), int(fields[14])
+        rss_kb = 0
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss_kb = int(line.split()[1])
+                    break
+        return utime + stime, rss_kb / 1024.0
+    except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
+        return None
+
+
+def vm_metrics_thread():
+    clk_tck = os.sysconf("SC_CLK_TCK")
+    prev_ticks = None
+    prev_time = None
+    while True:
+        time.sleep(VM_METRICS_INTERVAL)
+        if DEMO_MODE or not state.vm_running:
+            prev_ticks = None
+            continue
+        pid = read_qemu_pid()
+        sample = sample_qemu_proc(pid) if pid else None
+        if sample is None:
+            prev_ticks = None
+            continue
+        ticks, rss_mb = sample
+        now = time.time()
+        cpu_pct = 0.0
+        if prev_ticks is not None:
+            elapsed = now - prev_time
+            if elapsed > 0:
+                cpu_pct = round((ticks - prev_ticks) / clk_tck / elapsed * 100, 1)
+        prev_ticks, prev_time = ticks, now
+        with state.lock:
+            state.vm_metrics["timestamps"].append(now)
+            state.vm_metrics["cpu"].append(cpu_pct)
+            state.vm_metrics["mem_mb"].append(round(rss_mb, 1))
+
+
+def vm_start_worker():
+    with state.lock:
+        if state.vm_running or state.vm_busy:
+            return
+        state.vm_busy = True
+        state.vm_last_error = ""
+    broadcast_sse("vm_status", {"vm_running": False, "vm_busy": True})
+
+    ok, output = run_vm_controller("start")
+    if ok:
+        entries = load_ports()
+        if entries:
+            start_listeners(entries)
+            with state.lock:
+                state.vm_running = True
+        else:
+            ok = False
+            output = "VM started but no serial ports were detected"
+
+    with state.lock:
+        state.vm_busy = False
+        if not ok:
+            state.vm_last_error = output
+    print(f"[pipeline_web] VM start {'succeeded' if ok else 'failed: ' + output}")
+    broadcast_sse("vm_status", {"vm_running": state.vm_running, "vm_busy": False})
+
+
+def vm_stop_worker():
+    with state.lock:
+        if not state.vm_running or state.vm_busy:
+            return
+        state.vm_busy = True
+    broadcast_sse("vm_status", {"vm_running": True, "vm_busy": True})
+
+    stop_listeners()
+    ok, output = run_vm_controller("stop")
+
+    with state.lock:
+        state.vm_running = False
+        state.vm_busy = False
+        state.vm_metrics["timestamps"].clear()
+        state.vm_metrics["cpu"].clear()
+        state.vm_metrics["mem_mb"].clear()
+        if not ok:
+            state.vm_last_error = output
+    print(f"[pipeline_web] VM stop {'succeeded' if ok else 'failed: ' + output}")
+    broadcast_sse("vm_status", {"vm_running": False, "vm_busy": False})
 
 
 def broadcast_sse(event_type, data):
@@ -368,10 +601,10 @@ def analysis_worker_thread():
 
 
 def batch_timer_thread():
-    while (state.host_running or state.supervisor_running_count > 0) or (state.host_proc is None and not state.supervisor_procs):
+    while True:
         time.sleep(1)
-        if not state.host_running and state.supervisor_running_count <= 0 and (state.host_proc is not None or state.supervisor_procs):
-            break
+        if not (state.host_running or state.supervisor_running_count > 0):
+            continue
 
         elapsed = time.time() - (state.batches[-1]["timestamp"] if state.batches else state.start_time)
         if elapsed < BATCH_INTERVAL:
@@ -613,6 +846,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(cfg)
         elif self.path == "/api/llm/ollama-models":
             self.send_json({"models": fetch_ollama_models()})
+        elif self.path == "/api/vm/metrics":
+            with state.lock:
+                self.send_json({
+                    "timestamps": list(state.vm_metrics["timestamps"]),
+                    "cpu": list(state.vm_metrics["cpu"]),
+                    "mem_mb": list(state.vm_metrics["mem_mb"]),
+                })
         elif self.path == "/api/stream":
             self.handle_sse()
         elif self.path.startswith("/api/files"):
@@ -621,6 +861,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.handle_file_content()
         elif self.path.endswith(".png"):
             self.serve_static_png()
+        elif self.path.startswith("/novnc/"):
+            self.serve_novnc_file()
         else:
             self.send_error(404)
 
@@ -669,6 +911,28 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             print(f"[pipeline_web] LLM config updated: provider={provider} model={model}", flush=True)
             broadcast_sse("llm_config", {"provider": provider, "model": model})
             self.send_json({"status": "ok", "provider": provider, "model": model})
+        elif self.path == "/api/vm/start":
+            if DEMO_MODE:
+                self.send_json({"error": "VM control disabled in demo mode"}, 403)
+                return
+            with state.lock:
+                busy, running = state.vm_busy, state.vm_running
+            if busy or running:
+                self.send_json({"error": "VM already running or busy"}, 409)
+            else:
+                threading.Thread(target=vm_start_worker, daemon=True).start()
+                self.send_json({"status": "starting"})
+        elif self.path == "/api/vm/stop":
+            if DEMO_MODE:
+                self.send_json({"error": "VM control disabled in demo mode"}, 403)
+                return
+            with state.lock:
+                busy, running = state.vm_busy, state.vm_running
+            if busy or not running:
+                self.send_json({"error": "VM not running or busy"}, 409)
+            else:
+                threading.Thread(target=vm_stop_worker, daemon=True).start()
+                self.send_json({"status": "stopping"})
         else:
             self.send_error(404)
     def handle_export_zip(self):
@@ -785,6 +1049,26 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
+    def serve_novnc_file(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        novnc_root = os.path.abspath(os.path.join(script_dir, NOVNC_DIR))
+        rel_path = self.path[len("/novnc/"):].split("?")[0]
+        file_path = os.path.abspath(os.path.join(novnc_root, rel_path))
+        if not file_path.startswith(novnc_root + os.sep) or not os.path.isfile(file_path):
+            self.send_error(404)
+            return
+        content_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", len(content))
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception as e:
+            self.send_error(500, str(e))
+
     def handle_sse(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -814,46 +1098,246 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
+def seed_demo_batches():
+    now = time.time()
+    ts = [now - (7 - i) * 40 for i in range(7)]
+
+    net_pkg_1 = (
+        '{"packet_number": 201, "timestamp": "2026-09-17T14:18:11.442019+00:00", '
+        '"ethernet": {"src_mac": "52:54:00:12:34:56", "dst_mac": "52:55:0a:00:02:02", "type": "0x800"}, '
+        '"network": {"version": 4, "src_ip": "10.0.2.15", "dst_ip": "91.189.91.39", "protocol_number": 6, '
+        '"protocol_name": "TCP", "ttl": 64, "tos": 0, "identification": 9931, "flags": "DF", '
+        '"fragment_offset": 0, "total_length": 60, "header_length": 20}, '
+        '"transport": {"protocol": "TCP", "src_port": 47201, "dst_port": 443, "flags": "SYN", "seq": 0, "ack": 0}, '
+        '"payload": {"size_bytes": 0, "hex_preview": ""}, '
+        '"process": {"pid": 900, "name": "unattended-upgr", "user": "root"}, '
+        '"direction": "outbound", "raw_packet_size": 60}'
+    )
+    net_pkg_beacon = (
+        '{"packet_number": 812, "timestamp": "2026-09-17T14:22:41.203981+00:00", '
+        '"ethernet": {"src_mac": "52:54:00:12:34:56", "dst_mac": "52:55:0a:00:02:02", "type": "0x800"}, '
+        '"network": {"version": 4, "src_ip": "10.0.2.15", "dst_ip": "185.220.101.47", "protocol_number": 6, '
+        '"protocol_name": "TCP", "ttl": 64, "tos": 0, "identification": 44821, "flags": "DF", '
+        '"fragment_offset": 0, "total_length": 68, "header_length": 20}, '
+        '"transport": {"protocol": "TCP", "src_port": 51422, "dst_port": 4444, "flags": "PSH,ACK", "seq": 1, "ack": 1}, '
+        '"payload": {"size_bytes": 16, "hex_preview": "4245414e0001000000000000000000"}, '
+        '"process": {"pid": 4903, "name": "upd8r", "user": "root"}, '
+        '"direction": "outbound", "raw_packet_size": 82}'
+    )
+
+    batches_raw = [
+        {
+            "events": [
+                "[ebpf:ch1] 14:18:02  systemd          1        0        execve     /lib/systemd/systemd-udevd",
+                "[ebpf:ch1] 14:18:04  cron             612      0        execve     /usr/sbin/cron",
+                "[ebpf:ch8] COMM: logrotate        PID: 615      UID: 0       FLAGS: 0x0    FILE: /var/log/syslog",
+                "[ebpf:ch9] COMM: run-parts        PID: 618      PPID: 612     UID: 0      PATH: /etc/cron.daily/apt-compat FLAGS:",
+                f"[network:ch10] {net_pkg_1}",
+            ],
+            "response": (
+                "VERDICT: SAFE\n"
+                "SEVERITY: 1\n"
+                "ANALYSIS: All observed activity matches routine system maintenance. cron (PID 612) invoked "
+                "logrotate and /etc/cron.daily/apt-compat at their scheduled window, both running as root with "
+                "expected parent/child ancestry from systemd -> cron -> run-parts. No sensitive-file, "
+                "privilege-escalation, or network anomaly categories were triggered. No further action needed."
+            ),
+            "rag": {"category": "UNKNOWN", "confidence": "LOW", "score": 0.11, "dense_similarity": 0.14, "categories": [], "hyde_degraded": False},
+            "tokens": 162, "duration": 3.8,
+        },
+        {
+            "events": [
+                "[ebpf:ch8] COMM: vim              PID: 3312     UID: 1000    FLAGS: 0x0    FILE: /etc/shadow",
+                "[ebpf:ch9] COMM: vim              PID: 3312     PPID: 3290    UID: 1000    PATH: /usr/bin/vim.basic FLAGS:",
+                "[ebpf:ch1] 14:19:47  bash             3290     1000     openat     /home/cerise/.bash_history",
+            ],
+            "response": (
+                "VERDICT: SUSPICIOUS\n"
+                "SEVERITY: 2\n"
+                "ANALYSIS: vim (PID 3312, uid 1000) opened /etc/shadow directly, which matches the Sensitive File "
+                "Access category (Base Criticality Level 3 in the retrieved doc), but the retrieved category is "
+                "MEDIUM confidence and the access pattern (interactive editor, single open, no subsequent write "
+                "syscalls or exfiltration) is about as consistent with an administrator auditing local accounts as "
+                "with recon. No correlated network or privilege-escalation activity followed within this window. "
+                "Recommend monitoring PID 3312's parent shell for follow-up actions before escalating."
+            ),
+            "rag": {"category": "sensitive_file_access", "confidence": "MEDIUM", "score": 0.58, "dense_similarity": 0.61, "categories": ["sensitive_file_access"], "hyde_degraded": False},
+            "tokens": 201, "duration": 4.6,
+        },
+        {
+            "events": [
+                "[ebpf:ch9] COMM: cnfg_updater     PID: 4821     PPID: 4790    UID: 1000    PATH: /tmp/.X11-unix/.cache/upd8r FLAGS: [SUSPICIOUS_PATH]",
+                "[ebpf:ch7] 14:22:03  cnfg_updater     4821     1000     setresuid  ",
+                "[ebpf:ch7] 14:22:03  cnfg_updater     4821     1000     setresuid  ruid=1000, euid=0, suid=0",
+                "[ebpf:ch1] 14:22:03  cnfg_updater     4821     0        execve     /tmp/.X11-unix/.cache/upd8r",
+            ],
+            "response": (
+                "VERDICT: THREAT\n"
+                "SEVERITY: 4\n"
+                "ANALYSIS: Process cnfg_updater (PID 4821, spawned from an interactive bash at PPID 4790, uid 1000) "
+                "called setresuid(ruid=1000, euid=0, suid=0), successfully transitioning from an unprivileged shell "
+                "to root without going through sudo/pkexec or any setuid binary. This matches the Privilege "
+                "Escalation category's core Anomaly Pattern (Base Criticality Level 4) and does not match its "
+                "Normal Patterns, which require a known setuid binary in the call path. No corresponding sudo log "
+                "entry exists for this uid/pid pair in the batch. Treat PID 4821 and its process tree as "
+                "compromised going forward."
+            ),
+            "rag": {"category": "privilege_escalation", "confidence": "HIGH", "score": 0.84, "dense_similarity": 0.79, "categories": ["privilege_escalation"], "hyde_degraded": False},
+            "tokens": 248, "duration": 5.9,
+        },
+        {
+            "events": [
+                '[ebpf:ch3] {"e":"fm","c":"upd8r","p":4903,"u":0,"n":"memfd:a3f21c (deleted)"}',
+                "[ebpf:ch9] COMM: upd8r            PID: 4903     PPID: 4821    UID: 0       PATH: /proc/self/fd/7 FLAGS: [SUSPICIOUS_PATH] [UNEXPECTED_USER]",
+                "[ebpf:ch1] 14:22:39  upd8r            4903     0        mmap       PROT_EXEC|PROT_WRITE",
+            ],
+            "response": (
+                "VERDICT: THREAT\n"
+                "SEVERITY: 5\n"
+                "ANALYSIS: Immediately after the privilege escalation in the prior window (same COMM cnfg_updater, "
+                "now PID 4903, root), the process executed code from an anonymous memfd (memfd:a3f21c (deleted)) "
+                "with no backing file on disk, a textbook fileless-execution technique used to evade file-based "
+                "AV/EDR. This corroborates the Fileless Execution category's Anomaly Pattern (Base Criticality "
+                "Level 5) at HIGH confidence; there is no benign Normal Pattern (e.g. JIT compiler, systemd-run) "
+                "that matches an unlinked memfd running as root right after an unauthorized setresuid. Combined "
+                "with the privilege escalation in the previous batch, this is a single causal chain: unprivileged "
+                "shell -> root escalation -> fileless payload execution."
+            ),
+            "rag": {"category": "fileless_execution", "confidence": "HIGH", "score": 0.91, "dense_similarity": 0.88, "categories": ["fileless_execution", "privilege_escalation"], "hyde_degraded": False},
+            "tokens": 289, "duration": 6.7,
+        },
+        {
+            "events": [
+                "[ebpf:ch6] COMM: upd8r      PID: 4903   UID: 0      IP: 3118853167     :4444 FLAGS: SUSPICIOUS",
+                f"[network:ch10] {net_pkg_beacon}",
+            ],
+            "response": (
+                "VERDICT: THREAT\n"
+                "SEVERITY: 5\n"
+                "ANALYSIS: PID 4903 (the same fileless payload from the previous batch, now running as root) "
+                "opened an outbound TCP connection from 10.0.2.15:51422 to 185.220.101.47:4444, and the "
+                "kernel-level Network Suspicious probe independently flagged the same PID/UID pair on that "
+                "destination. The 16-byte payload beginning with the ASCII marker \"BEACON\" is consistent with a "
+                "C2 check-in rather than legitimate application traffic, and port 4444 is a common default for "
+                "post-exploitation frameworks. Correlating the [ebpf] and [network] events by PID confirms this is "
+                "the same process chain as the two prior THREAT batches, not an independent event. Recommend "
+                "isolating the host and blocking 185.220.101.47 immediately."
+            ),
+            "rag": {"category": "network_suspicious", "confidence": "HIGH", "score": 0.87, "dense_similarity": 0.82, "categories": ["network_suspicious", "fileless_execution"], "hyde_degraded": False},
+            "tokens": 275, "duration": 6.1,
+        },
+        {
+            "events": [
+                '[ebpf:ch2] {"evt":"docker_sock","comm":"curl","pid":5210,"ppid":5188,"uid":1000,"path":"/var/run/docker.sock"}',
+                "[ebpf:ch9] COMM: curl             PID: 5210     PPID: 5188    UID: 1000    PATH: /usr/bin/curl FLAGS:",
+            ],
+            "response": (
+                "VERDICT: SUSPICIOUS\n"
+                "SEVERITY: 3\n"
+                "ANALYSIS: curl (PID 5210, uid 1000, PPID 5188) connected to /var/run/docker.sock, matching the "
+                "Docker Socket Access category (Base Criticality Level 3, MEDIUM confidence retrieved). "
+                "Unprivileged access to the Docker socket is a known container-escape / privilege-escalation "
+                "vector (equivalent to root), but this single event alone doesn't confirm exploitation; no "
+                "follow-up container-creation or volume-mount API call was captured in this window, and curl "
+                "against the socket can also occur during legitimate local tooling or debugging. Recommend "
+                "watching PID 5210's parent (5188) for a subsequent docker create/API call with a mounted host "
+                "path before escalating to THREAT."
+            ),
+            "rag": {"category": "docker_socket_access", "confidence": "MEDIUM", "score": 0.55, "dense_similarity": 0.52, "categories": ["docker_socket_access"], "hyde_degraded": False},
+            "tokens": 231, "duration": 5.2,
+        },
+        {
+            "events": [
+                '[ebpf:ch5] {"e":"log_tamp","c":"upd8r","p":4903,"u":0,"f":"/var/log/auth.log"}',
+                '[ebpf:ch5] {"e":"log_tamp","c":"upd8r","p":4903,"u":0,"f":"/home/cerise/.bash_history"}',
+                "[ebpf:ch9] COMM: upd8r            PID: 4903     PPID: 4821    UID: 0       PATH: /usr/bin/truncate FLAGS: [UNEXPECTED_USER]",
+            ],
+            "response": (
+                "VERDICT: THREAT\n"
+                "SEVERITY: 4\n"
+                "ANALYSIS: The same root-owned process (upd8r, PID 4903, descendant of the PID 4821 chain flagged "
+                "as THREAT twice already in this session) truncated /var/log/auth.log and "
+                "/home/cerise/.bash_history immediately after the C2 beacon in the prior batch. This matches the "
+                "Log Tampering category's Anomaly Pattern at HIGH confidence (Base Criticality Level 4): "
+                "legitimate log rotation is performed by logrotate under a cron-owned ancestry (see batch #1 for "
+                "the benign baseline), never by a process that just escalated privileges and beaconed to an "
+                "external IP. This is consistent anti-forensics behavior closing out a full intrusion chain: "
+                "privilege escalation -> fileless execution -> C2 beacon -> log tampering."
+            ),
+            "rag": {"category": "log_tampering", "confidence": "HIGH", "score": 0.89, "dense_similarity": 0.85, "categories": ["log_tampering"], "hyde_degraded": False},
+            "tokens": 267, "duration": 6.0,
+        },
+    ]
+
+    batches = []
+    ebpf_total, network_total = 0, 0
+    events_per_port = {}
+    for i, b in enumerate(batches_raw):
+        for line in b["events"]:
+            tag = line[1:line.index("]")]
+            events_per_port[tag] = events_per_port.get(tag, 0) + 1
+            if tag.startswith("network"):
+                network_total += 1
+            else:
+                ebpf_total += 1
+        batches.append({
+            "id": i + 1,
+            "timestamp": ts[i],
+            "events": b["events"],
+            "event_count": len(b["events"]),
+            "response": b["response"],
+            "status": "complete",
+            "tokens": b["tokens"],
+            "duration": b["duration"],
+            "rag": b["rag"],
+        })
+
+    with state.lock:
+        state.batches = batches
+        state.batch_counter = len(batches)
+        state.total_events = ebpf_total + network_total
+        state.ebpf_count = ebpf_total
+        state.network_count = network_total
+        state.events_per_port = events_per_port
+        state.last_event_time = ts[-1]
+        state.start_time = now - 8100
+        state.host_running = True
+        state.supervisor_running_count = 1
+        state.ports = [f"/dev/pts/{n}" for n in range(7, 18)]
+        state.host_ports = state.ports[:9]
+        state.supervisor_ports = state.ports[9:]
+
+
 def main():
     print("[pipeline_web] Starting Cerise Pipeline Web Dashboard...")
 
-    threading.Thread(target=init_rag_thread, daemon=True).start()
+    if DEMO_MODE:
+        print("[pipeline_web] DEMO MODE: seeding fake batches/dashboard data; VM Screen stays real.")
+        rag_ready.set()
+        seed_demo_batches()
+    else:
+        threading.Thread(target=init_rag_thread, daemon=True).start()
 
     entries = load_ports()
-    state.ports = [path for _, path in entries]
+    if entries and vm_is_active():
+        start_listeners(entries)
+        state.vm_running = True
+        print(f"[pipeline_web] Detected running VM, attached to {len(entries)} serial port(s)")
+    else:
+        print("[pipeline_web] No VM running yet. Use the dashboard's Start VM button.")
 
-    for label, path in entries:
-        num = int("".join(filter(str.isdigit, label)) or "0")
-        if num >= 10:
-            state.supervisor_ports.append(path)
-        else:
-            state.host_ports.append(path)
+    state.vnc_proc = spawn_websockify()
+    if state.vnc_proc:
+        state.vnc_running = True
+        print(f"[pipeline_web] websockify spawned on port {NOVNC_WS_PORT} (PID {state.vnc_proc.pid})")
 
-    print(f"[pipeline_web] Host (eBPF) ports ({len(state.host_ports)}):")
-    for p in state.host_ports:
-        print(f"  {p}")
-    print(f"[pipeline_web] Supervisor (network) ports ({len(state.supervisor_ports)}):")
-    for p in state.supervisor_ports:
-        print(f"  {p}")
-
-    if state.host_ports:
-        state.host_proc = spawn_process("host_listener", state.host_ports)
-        if state.host_proc:
-            state.host_running = True
-            print(f"[pipeline_web] host_listener spawned (PID {state.host_proc.pid})")
-            threading.Thread(target=reader_thread, args=(state.host_proc, "ebpf", False), daemon=True).start()
-
-    if state.supervisor_ports:
-        for sp in state.supervisor_ports:
-            proc = spawn_process("supervisor_listener", [sp])
-            if proc:
-                state.supervisor_procs.append(proc)
-                state.supervisor_running_count += 1
-                print(f"[pipeline_web] supervisor_listener spawned on {sp} (PID {proc.pid})")
-                threading.Thread(target=reader_thread, args=(proc, "network", True), daemon=True).start()
+    state.ttyd_proc = spawn_ttyd()
+    if state.ttyd_proc:
+        print(f"[pipeline_web] ttyd spawned on {TTYD_HOST}:{TTYD_PORT} (PID {state.ttyd_proc.pid})")
 
     threading.Thread(target=analysis_worker_thread, daemon=True).start()
     threading.Thread(target=batch_timer_thread, daemon=True).start()
+    threading.Thread(target=vm_metrics_thread, daemon=True).start()
 
     server = ThreadedHTTPServer((WEB_HOST, WEB_PORT), DashboardHandler)
     print(f"[pipeline_web] Dashboard available at http://localhost:{WEB_PORT}")
@@ -863,11 +1347,13 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[pipeline_web] Shutting down...")
-        all_procs = [state.host_proc] + state.supervisor_procs
-        for proc in all_procs:
-            if proc:
-                proc.terminate()
-                proc.wait()
+        stop_listeners()
+        if state.vnc_proc:
+            state.vnc_proc.terminate()
+            state.vnc_proc.wait()
+        if state.ttyd_proc:
+            state.ttyd_proc.terminate()
+            state.ttyd_proc.wait()
         server.shutdown()
         print("[pipeline_web] Done.")
 

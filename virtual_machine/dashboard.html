@@ -308,93 +308,6 @@
       border-radius: 8px
     }
 
-    .fb-path {
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 8px;
-      font-family: var(--font-mono)
-    }
-
-    .fb-entry {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 8px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      transition: background .15s
-    }
-
-    .fb-entry:hover {
-      background: rgba(0, 184, 217, 0.1)
-    }
-
-    .fb-icon {
-      font-size: 16px;
-      width: 20px;
-      text-align: center;
-      flex-shrink: 0
-    }
-
-    .fb-name {
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap
-    }
-
-    .fb-size {
-      font-size: 11px;
-      color: var(--muted);
-      font-family: var(--font-mono)
-    }
-
-    .fb-viewer {
-      margin-top: 12px;
-      padding: 12px;
-      background: var(--surface-sec);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      max-height: 400px;
-      overflow: auto
-    }
-
-    .fb-viewer pre {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      line-height: 1.6;
-      white-space: pre-wrap;
-      color: var(--text)
-    }
-
-    .fb-viewer-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px
-    }
-
-    .fb-close {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      padding: 2px 8px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 11px
-    }
-
-    .fb-close:hover {
-      color: var(--text);
-      border-color: var(--accent)
-    }
-
-    .fb-list {
-      max-height: 300px;
-      overflow-y: auto
-    }
-
     .dash-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -703,6 +616,7 @@
       <div class="tabs">
         <div class="tab active" data-tab="overview">Dashboard</div>
         <div class="tab" data-tab="detail">Batch Detail</div>
+        <div class="tab" data-tab="vmscreen">VM Screen</div>
       </div>
       <div class="tab-content">
         <div class="tab-panel active" id="panel-overview">
@@ -733,15 +647,37 @@
             </div>
           </div>
           <div class="card">
-            <h3>Project Files</h3>
-            <div class="fb-path" id="fb-path">/</div>
-            <div class="fb-list" id="fb-list"></div>
-            <div id="fb-viewer-wrap"></div>
+            <h3>Terminal</h3>
+            <iframe src="http://127.0.0.1:7682/" style="width:100%;height:420px;border:1px solid var(--border);border-radius:6px;background:#000" title="Host terminal"></iframe>
           </div>
         </div>
         <div class="tab-panel" id="panel-detail">
           <div id="detail-container">
             <div class="empty-state"><span style="font-size:14px">Select a batch from the sidebar</span></div>
+          </div>
+        </div>
+        <div class="tab-panel" id="panel-vmscreen">
+          <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+              <h3 style="margin:0">VM Screen <span id="vnc-status" style="font-size:12px;color:var(--muted)">disconnected</span></h3>
+              <div style="display:flex;align-items:center;gap:10px">
+                <span id="vm-lifecycle-status" style="font-size:12px;color:var(--muted)">stopped</span>
+                <button id="vm-start-btn" onclick="vmAction('start')" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:6px;padding:6px 14px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Start VM</button>
+                <button id="vm-stop-btn" onclick="vmAction('stop')" disabled style="background:none;border:1px solid var(--red);color:var(--red);padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Stop VM</button>
+              </div>
+            </div>
+            <div id="vm-error-box" style="display:none;background:rgba(239,68,68,0.1);border:1px solid var(--red);color:var(--red);border-radius:6px;padding:8px 12px;font-size:12px;font-family:var(--font-mono);white-space:pre-wrap;margin-bottom:12px"></div>
+            <div id="vnc-screen" style="width:100%;max-width:800px;aspect-ratio:4/3;margin:0 auto;background:#000;border:1px solid var(--border);border-radius:6px;overflow:hidden"></div>
+          </div>
+          <div class="dash-grid" id="vm-metrics-grid" style="display:none">
+            <div class="card">
+              <h3>VM CPU Usage <span id="vm-cpu-label" style="font-size:12px;color:var(--muted)"></span></h3>
+              <canvas id="chart-vm-cpu" height="120"></canvas>
+            </div>
+            <div class="card">
+              <h3>VM Memory Usage <span id="vm-mem-label" style="font-size:12px;color:var(--muted)"></span></h3>
+              <canvas id="chart-vm-mem" height="120"></canvas>
+            </div>
           </div>
         </div>
       </div>
@@ -807,12 +743,81 @@
     const chatMessages = document.getElementById('chat-messages'), chatInput = document.getElementById('chat-input'), chatSend = document.getElementById('chat-send');
     let activeBatchId = null, currentChatBotMsg = null, batches = [];
     let eventTimeline = [], ebpfCount = 0, networkCount = 0, portCounts = {};
+    let isDemoMode = false;
 
     function formatTime(s) { const m = Math.floor(s / 60), h = Math.floor(m / 60); return h > 0 ? `${h}h${m % 60}m` : m > 0 ? `${m}m${s % 60}s` : `${s}s` }
     function timeAgo(ts) { const d = Math.floor(Date.now() / 1000 - ts); return d < 60 ? `${d}s ago` : d < 3600 ? `${Math.floor(d / 60)}m ago` : `${Math.floor(d / 3600)}h ago` }
     function escapeHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
-    function switchTab(n) { document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === n)); document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${n}`)) }
+    function switchTab(n) { document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === n)); document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${n}`)); if (n === 'vmscreen') connectVncScreen() }
     document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => switchTab(t.dataset.tab)));
+
+    let vncRfb = null;
+    function connectVncScreen() {
+      if (vncRfb) return;
+      const statusEl = document.getElementById('vnc-status');
+      const container = document.getElementById('vnc-screen');
+      statusEl.textContent = 'connecting...';
+      import('/novnc/core/rfb.js').then(({ default: RFB }) => {
+        vncRfb = new RFB(container, `ws://${location.hostname}:6080/websockify`);
+        vncRfb.scaleViewport = true;
+        vncRfb.resizeSession = true;
+        vncRfb.addEventListener('connect', () => statusEl.textContent = 'connected');
+        vncRfb.addEventListener('disconnect', () => { statusEl.textContent = 'disconnected'; vncRfb = null });
+      }).catch(() => { statusEl.textContent = 'unavailable'; vncRfb = null });
+    }
+
+    let demoTerminalRendered = false;
+    function renderDemoTerminal() {
+      const container = document.getElementById('vnc-screen');
+      container.innerHTML = `<div style="height:100%;min-height:480px;background:#0c0c0c;color:#d0d0d0;font-family:var(--font-mono);font-size:11px;line-height:1.5;display:flex;flex-direction:column">
+        <pre style="margin:0;padding:12px;white-space:pre;overflow:auto;flex:1">top - 14:23:07 up 3 days,  6:12,  1 user,  load average: 4.82, 3.91, 2.44
+Tasks: 214 total,   3 running, 210 sleeping,   0 stopped,   1 zombie
+%Cpu(s): 97.3 us,  1.8 sy,  0.0 ni,  0.6 id,  0.0 wa,  0.0 hi,  0.3 si,  0.0 st
+MiB Mem :   7935.2 total,    142.6 free,   7601.8 used,    190.8 buff/cache
+MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
+
+  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+<span style="color:#fff;font-weight:700">4903 root      20   0  912400 784216   1024 R 287.5   9.9  14:32.09 upd8r</span>
+  512 root      20   0   45120   4200   3800 S   1.3   0.1   0:01.02 systemd
+ 1024 root      20   0   77812   8944   6512 S   0.7   0.1   0:03.21 systemd-journald
+  899 root      20   0  289232  15200  10200 S   0.3   0.2   0:02.11 NetworkManager
+  733 message+  20   0   45988   5544   4200 S   0.0   0.1   0:00.44 dbus-daemon
+ 1102 cerise    20   0  654320  45200  32100 S   0.0   0.6   0:00.98 gnome-shell
+ 1340 cerise    20   0  412000  28800  21000 S   0.0   0.4   0:00.21 Xorg
+  620 root      20   0   28900   3200   2800 S   0.0   0.0   0:00.03 cron
+  455 root      20   0   18240   1900   1700 S   0.0   0.0   0:00.02 sshd
+ 1501 cerise    20   0   38200   6100   5200 S   0.0   0.1   0:00.11 bash
+</pre></div>`;
+    }
+
+    let demoChatRendered = false;
+    function renderDemoChat() {
+      const exchanges = [
+        ['user', "What's going on with this host? Give me a summary."],
+        ['bot', "Summary of the last 7 batches: an unprivileged shell (PID 4821, disguised as cnfg_updater) escalated to root via setresuid without going through sudo or a setuid binary (Batch #3). Seconds later the same chain (now PID 4903, root) executed code from an anonymous memfd with no file on disk (Batch #4) and opened an outbound connection to 185.220.101.47:4444 (Batch #5), consistent with a C2 beacon. It also probed /var/run/docker.sock from a separate low-priv process (Batch #6), and finally truncated auth.log and .bash_history (Batch #7) to cover its tracks.\n\nTotal: 3 THREAT verdicts, 2 SUSPICIOUS, 1 SAFE baseline."],
+        ['user', 'Does this match a known malware family?'],
+        ['bot', "The combination — privilege escalation without sudo, fileless execution via memfd, Docker socket probing, and log tampering — is the signature toolkit of Linux cryptojacking worms like TeamTNT rather than a targeted APT. I can't confirm attribution from telemetry alone, but the TTP overlap is strong enough to treat this as a commodity cryptojacking/worm infection rather than a one-off."],
+        ['user', 'What should I do right now?'],
+        ['bot', "1. Isolate this host from the network immediately, the C2 channel is still reachable.\n2. Block 185.220.101.47 at the perimeter.\n3. Kill and preserve process 4903 and its tree for forensics before it's lost on reboot.\n4. Rotate any credentials that were valid on this host (root was reached, assume full compromise).\n5. Check cron, systemd timers, and ~/.ssh/authorized_keys for persistence before rebuilding."],
+        ['user', "Why wasn't this blocked by sudo policies?"],
+        ['bot', "It never touched sudo. The escalation called setresuid() directly from a process with a suid-root helper binary (/tmp/.X11-unix/.cache/upd8r) planted ahead of time. sudo policy and auditd rules keyed on sudo/su invocations won't see this; you'd need syscall-level monitoring, which is exactly what flagged it here, or restrict execution from world-writable directories like /tmp."],
+      ];
+      chatMessages.innerHTML = '';
+      exchanges.forEach(([role, text]) => {
+        const el = document.createElement('div');
+        el.className = `chat-msg ${role === 'user' ? 'user' : 'bot'}`;
+        el.textContent = text;
+        chatMessages.appendChild(el);
+      });
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    let prevVmRunning = false;
+    function vmAction(action) {
+      document.getElementById('vm-start-btn').disabled = true;
+      document.getElementById('vm-stop-btn').disabled = true;
+      fetch(`/api/vm/${action}`, { method: 'POST' }).catch(() => {});
+    }
 
     function drawTimeline() {
       const c = document.getElementById('chart-timeline'), ctx = c.getContext('2d');
@@ -847,30 +852,32 @@
       slices.forEach(s => { ctx.fillStyle = s.c; ctx.fillRect(cx - 60, ly - 8, 10, 10); ctx.fillStyle = 'var(--text)'; ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif'; ctx.textAlign = 'left'; ctx.fillText(`${s.l}: ${s.v}`, cx - 44, ly); ly += 16 });
     }
 
-    function loadDir(path) {
-      fetch(`/api/files?path=${encodeURIComponent(path)}`).then(r => r.json()).then(d => {
-        if (d.error) return;
-        document.getElementById('fb-path').textContent = d.path || '/';
-        document.getElementById('fb-viewer-wrap').innerHTML = '';
-        const list = document.getElementById('fb-list');
-        let html = '';
-        if (d.path) { html += `<div class="fb-entry" onclick="loadDir('${d.path.split('/').slice(0, -1).join('/')}')" ><span class="fb-icon">⬆</span><span class="fb-name">..</span><span class="fb-size"></span></div>` }
-        d.entries.forEach(e => {
-          if (e.is_dir) { html += `<div class="fb-entry" onclick="loadDir('${e.path}')"><span class="fb-icon">📁</span><span class="fb-name">${e.name}</span><span class="fb-size"></span></div>` }
-          else { const sz = e.size > 1024 ? (e.size / 1024).toFixed(1) + 'K' : e.size + 'B'; html += `<div class="fb-entry" onclick="openFile('${e.path}')"><span class="fb-icon">📄</span><span class="fb-name">${e.name}</span><span class="fb-size">${sz}</span></div>` }
-        });
-        list.innerHTML = html;
-      });
+    function drawMetricChart(canvasId, values, strokeColor, fillColor, label, unit, minMax) {
+      const c = document.getElementById(canvasId), ctx = c.getContext('2d');
+      c.width = c.offsetWidth * 2; c.height = 240; ctx.scale(2, 2);
+      const w = c.offsetWidth, h = 120; ctx.clearRect(0, 0, w, h);
+      document.getElementById(label).textContent = values.length ? `${values[values.length - 1]}${unit}` : '';
+      if (!values || values.length < 2) return;
+      const max = Math.max(...values, minMax || 1);
+      const n = values.length;
+      ctx.fillStyle = fillColor; ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      values.forEach((v, i) => { const x = 8 + i * (w - 16) / (n - 1), y = h - 14 - (v / max) * (h - 24); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y) });
+      ctx.stroke();
+      ctx.lineTo(w - 8, h - 14); ctx.lineTo(8, h - 14); ctx.closePath(); ctx.fill();
     }
-    function openFile(path) {
-      fetch(`/api/file?path=${encodeURIComponent(path)}`).then(r => r.json()).then(d => {
-        if (d.error) { alert(d.error); return }
-        document.getElementById('fb-viewer-wrap').innerHTML = `<div class="fb-viewer"><div class="fb-viewer-header"><span style="font-size:12px;font-weight:600;color:var(--accent)">${d.name}</span><button class="fb-close" onclick="this.closest('.fb-viewer').remove()">✕</button></div><pre>${escapeHtml(d.content)}</pre></div>`;
-      });
+
+    function pollVmMetrics() {
+      if (isDemoMode) return;
+      fetch('/api/vm/metrics').then(r => r.json()).then(m => {
+        drawMetricChart('chart-vm-cpu', m.cpu || [], 'rgba(245,158,11,0.8)', 'rgba(245,158,11,0.15)', 'vm-cpu-label', '%', 100);
+        drawMetricChart('chart-vm-mem', m.mem_mb || [], 'rgba(77,168,255,0.8)', 'rgba(77,168,255,0.15)', 'vm-mem-label', ' MB', 512);
+      }).catch(() => {});
     }
-    loadDir('');
 
     function updateStatus(s) {
+      isDemoMode = !!s.demo_mode;
+      if (isDemoMode && !demoChatRendered) { renderDemoChat(); demoChatRendered = true }
       document.getElementById('stat-events').textContent = s.total_events;
       document.getElementById('stat-batches').textContent = s.batch_count;
       document.getElementById('stat-uptime').textContent = formatTime(s.uptime);
@@ -894,6 +901,14 @@
       document.getElementById('kpi-rate').textContent = rate;
       ebpfCount = s.ebpf_count || 0; networkCount = s.network_count || 0;
       drawTimeline(); drawSources();
+      document.getElementById('vm-metrics-grid').style.display = s.demo_mode ? 'none' : '';
+      document.getElementById('vm-start-btn').disabled = s.vm_running || s.vm_busy;
+      document.getElementById('vm-stop-btn').disabled = !s.vm_running || s.vm_busy;
+      document.getElementById('vm-lifecycle-status').textContent = s.vm_busy ? 'working...' : (s.vm_running ? 'running' : 'stopped');
+      const vmErrBox = document.getElementById('vm-error-box');
+      if (s.vm_last_error) { vmErrBox.style.display = 'block'; vmErrBox.textContent = s.vm_last_error } else { vmErrBox.style.display = 'none' }
+      if (s.vm_running && !prevVmRunning) connectVncScreen();
+      prevVmRunning = s.vm_running;
     }
 
     function renderBatchList() {
@@ -1038,8 +1053,18 @@
       setTimeout(() => { btn.textContent = '⬇ Export ZIP'; btn.disabled = false }, 1500);
     }
 
-    setInterval(() => { fetch('/api/status').then(r => r.json()).then(updateStatus).catch(() => { document.getElementById('ollama-dot').className = 'dot dot-red'; document.getElementById('ollama-status').textContent = 'Disconnected' }) }, 2000);
-    fetch('/api/batches').then(r => r.json()).then(l => { batches = l; renderBatchList() });
+    function pollStatus() { fetch('/api/status').then(r => r.json()).then(updateStatus).catch(() => { document.getElementById('ollama-dot').className = 'dot dot-red'; document.getElementById('ollama-status').textContent = 'Disconnected' }) }
+    pollStatus();
+    setInterval(pollStatus, 2000);
+    pollVmMetrics();
+    setInterval(pollVmMetrics, 2000);
+    fetch('/api/batches').then(r => r.json()).then(l => {
+      batches = l; renderBatchList();
+      if (eventTimeline.length === 0) {
+        l.forEach(b => { for (let i = 0; i < b.event_count; i++) eventTimeline.push(b.timestamp) });
+        drawTimeline();
+      }
+    });
   </script>
 </body>
 

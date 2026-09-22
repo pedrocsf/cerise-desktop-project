@@ -6,3 +6,6 @@ vector_db/
 __pycache__/
 models/
 secrets/
+.eval_cache
+datasets/
+virtual_machine/novnc/

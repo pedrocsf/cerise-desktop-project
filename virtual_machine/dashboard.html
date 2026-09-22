@@ -13,6 +13,10 @@
       box-sizing: border-box
     }
 
+    button, input, select, textarea {
+      font-family: inherit
+    }
+
     :root {
       --font-sans: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       --font-display: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -480,9 +484,7 @@
       background: var(--bg);
       align-self: flex-start;
       border: 1px solid var(--border);
-      border-radius: 16px 16px 16px 4px;
-      font-family: var(--font-mono);
-      font-size: 12px
+      border-radius: 16px 16px 16px 4px
     }
 
     .chat-input-area {
@@ -1076,7 +1078,7 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       document.getElementById('host-dot').className = `dot ${s.host_running ? 'dot-green' : 'dot-red'}`;
       document.getElementById('supervisor-dot').className = `dot ${s.supervisor_running ? 'dot-green' : 'dot-red'}`;
       document.getElementById('ollama-dot').className = 'dot dot-green';
-      document.getElementById('ollama-status').textContent = 'llama';
+      document.getElementById('ollama-status').textContent = isDemoMode ? 'Claude' : 'llama';
       if (s.ports && s.ports.length) {
         const pl = document.getElementById('port-list');
         const epp = s.events_per_port || {};

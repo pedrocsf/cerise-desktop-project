@@ -842,6 +842,25 @@
           <button onclick="toggleLlmConfig()" style="background:none;border:1px solid var(--border);color:var(--muted);border-radius:var(--pill);padding:8px 14px;font-size:12px;cursor:pointer">Cancel</button>
         </div>
         <div id="llm-config-msg" style="font-size:11px;margin-top:6px;min-height:14px"></div>
+
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:18px 0 10px;border-top:1px solid rgba(250,250,250,0.06);padding-top:14px">Web Search Enrichment</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <select id="search-mode" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none">
+            <option value="disabled">Disabled</option>
+            <option value="auto">Automatic</option>
+            <option value="manual">Manual</option>
+          </select>
+          <select id="search-provider" style="background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none">
+            <option value="tavily">Tavily</option>
+          </select>
+        </div>
+        <div style="position:relative;margin-bottom:8px">
+          <input id="search-api-key" type="password" placeholder="Tavily API Key" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:7px 30px 7px 10px;border-radius:10px;font-size:12px;outline:none;box-sizing:border-box">
+          <span onclick="toggleSearchKeyVisibility()" style="position:absolute;right:8px;top:7px;cursor:pointer;font-size:12px;color:var(--muted)" title="Show/hide">👁</span>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px">Automatic: the LLM decides per batch if a detected indicator (IP/hash/domain) is worth searching. Manual: a button on each batch lets you trigger the search yourself.</div>
+        <button onclick="saveSearchConfig()" style="width:100%;background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(225,29,72,0.3)">Apply</button>
+        <div id="search-config-msg" style="font-size:11px;margin-top:6px;min-height:14px"></div>
       </div>
 
       <div class="chat-messages" id="chat-messages">
@@ -857,6 +876,7 @@
     const batchListEl = document.getElementById('batch-list'), detailContainer = document.getElementById('detail-container');
     const chatMessages = document.getElementById('chat-messages'), chatInput = document.getElementById('chat-input'), chatSend = document.getElementById('chat-send');
     let activeBatchId = null, currentChatBotMsg = null, batches = [];
+    let currentSearchMode = 'disabled';
     let eventTimeline = [], ebpfCount = 0, networkCount = 0, portCounts = {};
     let isDemoMode = false;
 
@@ -1119,15 +1139,50 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
         const sc = b.status === 'complete' ? 'status-complete' : b.status === 'analyzing' ? 'status-analyzing' : b.status === 'queued' ? 'status-queued' : 'status-error';
         const ic = b.status === 'complete' ? '✓' : b.status === 'analyzing' ? '⟳' : b.status === 'queued' ? '◎' : '✗';
         const sevDot = severityDotClass(b.response);
-        return `<div class="batch-item ${b.id === activeBatchId ? 'active' : ''}" onclick="selectBatch(${b.id})"><div style="display:flex;align-items:center;justify-content:space-between"><div class="batch-id">Batch #${b.id}</div>${sevDot}</div><div class="batch-meta">${b.event_count} events · ${timeAgo(b.timestamp)}</div><div class="batch-status ${sc}">${ic} ${b.status}${b.duration ? ' · ' + b.duration + 's' : ''}</div></div>`
+        const searchIcon = (b.search_performed || (b.search && b.search.performed)) ? '<span title="External search performed" style="font-size:10px;margin-left:4px">🔍</span>' : '';
+        return `<div class="batch-item ${b.id === activeBatchId ? 'active' : ''}" onclick="selectBatch(${b.id})"><div style="display:flex;align-items:center;justify-content:space-between"><div class="batch-id">Batch #${b.id}${searchIcon}</div>${sevDot}</div><div class="batch-meta">${b.event_count} events · ${timeAgo(b.timestamp)}</div><div class="batch-status ${sc}">${ic} ${b.status}${b.duration ? ' · ' + b.duration + 's' : ''}</div></div>`
       }).join('');
+    }
+
+    function renderSearchBlock(b) {
+      const s = b.search;
+      if (!s) return '';
+      let body;
+      if (!s.performed) {
+        body = `<span style="color:var(--muted)">${escapeHtml(s.note || 'No external search was performed for this batch.')}</span>`;
+      } else if (!s.sources.length) {
+        body = `<span style="color:var(--muted)">Searched ${s.terms.map(escapeHtml).join(', ')} — no relevant results found.</span>`;
+      } else {
+        body = s.terms.map(term => {
+          const items = s.sources.filter(x => x.term === term);
+          const list = items.length ? items.map(x => `<div style="margin:4px 0 4px 12px;font-size:11px"><a href="${x.url}" target="_blank" rel="noopener" style="color:var(--accent)">${escapeHtml(x.title || x.url)}</a><div style="color:var(--muted)">${escapeHtml(x.snippet)}</div></div>`).join('') : '<div style="margin-left:12px;color:var(--muted);font-size:11px">No relevant results found.</div>';
+          return `<div style="font-size:12px;font-weight:600;margin-top:8px">${escapeHtml(term)}</div>${list}`;
+        }).join('');
+      }
+      return `<div style="font-size:12px;font-weight:600;margin-bottom:8px;margin-top:16px;color:var(--muted)">EXTERNAL SEARCH RESULTS</div><div class="response-box">${body}</div>`;
+    }
+
+    function renderSearchButton(b) {
+      if (currentSearchMode !== 'manual') return '';
+      if (b.status !== 'complete' && b.status !== 'error') return '';
+      return `<button id="batch-search-btn-${b.id}" onclick="triggerBatchSearch(${b.id})" style="background:none;border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:var(--pill);font-size:12px;cursor:pointer;margin-top:10px">🔍 Search Internet</button>`;
+    }
+
+    function triggerBatchSearch(id) {
+      const btn = document.getElementById(`batch-search-btn-${id}`);
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Searching...' }
+      fetch(`/api/batch/${id}/search`, { method: 'POST' }).then(r => r.json()).then(d => {
+        if (d.error) { if (btn) { btn.disabled = false; btn.textContent = '🔍 Search Internet' } alert(d.error) }
+      });
     }
 
     function selectBatch(id) {
       activeBatchId = id; renderBatchList(); switchTab('detail');
       fetch(`/api/batch/${id}`).then(r => r.json()).then(b => {
+        const idx = batches.findIndex(x => x.id === b.id);
+        if (idx >= 0) batches[idx].search = b.search;
         let ev = b.events.slice(-50).map(e => `<div class="event-line" style="font-size:11px">${escapeHtml(e)}</div>`).join('');
-        detailContainer.innerHTML = `<div class="batch-detail-header"><h3>Batch #${b.id}</h3><div style="font-size:12px;color:var(--muted)">${b.event_count} events · Status: ${b.status} · Duration: ${b.duration || 0}s · Tokens: ${b.tokens || 0}</div></div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">EVENTS (last 50)</div><div class="events-box">${ev}</div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">ANALYSIS RESPONSE</div><div class="response-box" id="batch-response-${b.id}">${b.response ? escapeHtml(b.response) : '<span style="color:var(--muted)">Waiting for analysis...</span>'}</div>`;
+        detailContainer.innerHTML = `<div class="batch-detail-header"><h3>Batch #${b.id}</h3><div style="font-size:12px;color:var(--muted)">${b.event_count} events · Status: ${b.status} · Duration: ${b.duration || 0}s · Tokens: ${b.tokens || 0}</div></div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">EVENTS (last 50)</div><div class="events-box">${ev}</div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">ANALYSIS RESPONSE</div><div class="response-box" id="batch-response-${b.id}">${b.response ? escapeHtml(b.response) : '<span style="color:var(--muted)">Waiting for analysis...</span>'}</div><div id="batch-search-wrap-${b.id}">${renderSearchBlock(b)}${renderSearchButton(b)}</div>`;
       });
     }
 
@@ -1148,6 +1203,23 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       if (d.source === 'ebpf') ebpfCount++; else if (d.source === 'network') networkCount++;
     });
     evtSource.addEventListener('batch_created', e => { batches.push(JSON.parse(e.data)); renderBatchList() });
+    evtSource.addEventListener('batch_requeued', e => {
+      const d = JSON.parse(e.data); const idx = batches.findIndex(b => b.id === d.id);
+      if (idx >= 0) batches[idx].status = d.status;
+      renderBatchList();
+      if (activeBatchId === d.id && idx >= 0) {
+        const wrap = document.getElementById(`batch-search-wrap-${d.id}`);
+        if (wrap) wrap.innerHTML = renderSearchBlock(batches[idx]) + renderSearchButton(batches[idx]);
+      }
+    });
+    evtSource.addEventListener('search_context', e => {
+      const d = JSON.parse(e.data); const idx = batches.findIndex(b => b.id === d.batch_id);
+      if (idx >= 0) batches[idx].search = d.search;
+      if (activeBatchId === d.batch_id && idx >= 0) {
+        const wrap = document.getElementById(`batch-search-wrap-${d.batch_id}`);
+        if (wrap) wrap.innerHTML = renderSearchBlock(batches[idx]) + renderSearchButton(batches[idx]);
+      }
+    });
     evtSource.addEventListener('analysis_token', e => {
       const d = JSON.parse(e.data);
       if (activeBatchId === d.batch_id) { const el = document.getElementById(`batch-response-${d.batch_id}`); if (el) { if (el.querySelector('span')) el.innerHTML = ''; el.textContent += d.token } }
@@ -1155,8 +1227,17 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     evtSource.addEventListener('analysis_done', e => {
       const d = JSON.parse(e.data); const idx = batches.findIndex(b => b.id === d.batch_id);
       if (idx >= 0) { batches[idx].status = d.status; batches[idx].duration = d.duration; batches[idx].tokens = d.tokens; batches[idx].response = d.response } renderBatchList();
+      if (activeBatchId === d.batch_id && idx >= 0) {
+        const el = document.getElementById(`batch-response-${d.batch_id}`);
+        if (el) el.textContent = d.response;
+        const wrap = document.getElementById(`batch-search-wrap-${d.batch_id}`);
+        if (wrap) wrap.innerHTML = renderSearchBlock(batches[idx]) + renderSearchButton(batches[idx]);
+      }
     });
-    evtSource.addEventListener('analysis_start', () => { });
+    evtSource.addEventListener('analysis_start', e => {
+      const d = JSON.parse(e.data);
+      if (activeBatchId === d.batch_id) { const el = document.getElementById(`batch-response-${d.batch_id}`); if (el) el.innerHTML = '<span style="color:var(--muted)">Analyzing...</span>' }
+    });
     evtSource.addEventListener('chat_token', e => { const d = JSON.parse(e.data); if (currentChatBotMsg) currentChatBotMsg.textContent += d.token; chatMessages.scrollTop = chatMessages.scrollHeight });
     evtSource.addEventListener('chat_done', () => { chatSend.disabled = false; currentChatBotMsg = null });
 
@@ -1244,6 +1325,36 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       updateAgentLabel(d.provider, d.model);
     });
     // --- end LLM Config ---
+
+    // --- Web Search Config ---
+    function toggleSearchKeyVisibility() {
+      const f = document.getElementById('search-api-key');
+      f.type = f.type === 'password' ? 'text' : 'password';
+    }
+
+    function saveSearchConfig() {
+      const msg = document.getElementById('search-config-msg');
+      const mode = document.getElementById('search-mode').value;
+      const provider = document.getElementById('search-provider').value;
+      const api_key = document.getElementById('search-api-key').value.trim();
+      fetch('/api/search/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, provider, api_key })
+      }).then(r => r.json()).then(d => {
+        if (d.error) { msg.style.color = 'var(--red)'; msg.textContent = d.error; return; }
+        msg.style.color = 'var(--green)'; msg.textContent = 'Saved!';
+        currentSearchMode = d.mode;
+        if (activeBatchId !== null) selectBatch(activeBatchId);
+      });
+    }
+
+    fetch('/api/search/config').then(r => r.json()).then(cfg => {
+      currentSearchMode = cfg.mode;
+      document.getElementById('search-mode').value = cfg.mode;
+      document.getElementById('search-provider').value = cfg.provider;
+    });
+    // --- end Web Search Config ---
 
     function exportBatches() {
       const btn = document.getElementById('export-zip-btn');

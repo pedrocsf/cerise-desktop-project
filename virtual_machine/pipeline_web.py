@@ -20,6 +20,13 @@ import collections
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block, build_process_tree_block
+from search_enrichment import (
+    NO_SEARCH_TEXT,
+    enrich_automatic,
+    enrich_manual,
+    format_search_block,
+    get_search_provider,
+)
 
 SERIAL_PORTS_FILE = "serial_ports.list"
 BATCH_INTERVAL = 30
@@ -87,6 +94,7 @@ class PipelineState:
             "api_key": "",
         }
         self.vm_config = {"ram_mb": 8192, "cpus": 6}
+        self.search_config = {"mode": "disabled", "provider": "tavily", "api_key": ""}
 
     def get_status(self):
         with self.lock:
@@ -113,6 +121,7 @@ class PipelineState:
                 "batch_interval": BATCH_INTERVAL,
                 "llm_provider": self.llm_config["provider"],
                 "llm_model": self.llm_config["model"],
+                "search_mode": self.search_config["mode"],
                 "rag_ready": rag_ready.is_set() and rag_retriever is not None,
                 "hyde_degraded_count": self.hyde_degraded_count,
                 "vnc_running": self.vnc_running,
@@ -657,11 +666,12 @@ analysis_queue = queue.Queue()
 
 def analysis_worker_thread():
     while True:
-        batch = analysis_queue.get()
-        if batch is None:
+        item = analysis_queue.get()
+        if item is None:
             break
+        batch, force_manual_search = item
         try:
-            run_analysis(batch)
+            run_analysis(batch, force_manual_search=force_manual_search)
         except Exception as e:
             print(f"[pipeline_web] Analysis worker error: {e}", flush=True)
         analysis_queue.task_done()
@@ -701,7 +711,7 @@ def batch_timer_thread():
             "status": "queued"
         })
 
-        analysis_queue.put(batch)
+        analysis_queue.put((batch, False))
 
 
 _CLAIM_PATTERNS = {
@@ -740,7 +750,7 @@ def check_factual_consistency(batch_data, analysis_text):
     return warnings
 
 
-def run_analysis(batch):
+def run_analysis(batch, force_manual_search=False):
     batch_data = "\n".join(batch["events"][-100:])
     process_tree = build_process_tree_block(batch["events"][-100:])
 
@@ -779,9 +789,22 @@ def run_analysis(batch):
             state.hyde_degraded_count += 1
     broadcast_sse("rag_context", {"batch_id": batch["id"], **batch["rag"]})
 
+    search_result = None
+    if force_manual_search:
+        provider = get_search_provider(state.search_config["provider"], state.search_config["api_key"])
+        search_result = enrich_manual(batch_data, provider)
+    elif state.search_config["mode"] == "auto":
+        provider = get_search_provider(state.search_config["provider"], state.search_config["api_key"])
+        search_result = enrich_automatic(batch_data, _llm_sync, provider)
+
+    with state.lock:
+        batch["search"] = search_result
+    broadcast_sse("search_context", {"batch_id": batch["id"], "search": search_result})
+
     prompt = PROMPT_TEMPLATE.format(
         rag_context=format_rag_block(retrieval),
         process_tree=process_tree,
+        search_context=format_search_block(search_result),
         log_content=batch_data,
     )
 
@@ -892,6 +915,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     "duration": b.get("duration", 0),
                     "tokens": b.get("tokens", 0),
                     "response": b.get("response", ""),
+                    "search_performed": bool((b.get("search") or {}).get("performed")),
                 } for b in state.batches]
             self.send_json(batch_list)
         elif self.path.startswith("/api/batch/"):
@@ -927,6 +951,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 cfg = dict(state.vm_config)
                 cfg["vm_running"] = state.vm_running
             cfg["disk_size_gb"] = get_disk_size_gb()
+            self.send_json(cfg)
+        elif self.path == "/api/search/config":
+            with state.lock:
+                cfg = dict(state.search_config)
+            cfg["api_key"] = "***" if cfg["api_key"] else ""
             self.send_json(cfg)
         elif self.path == "/api/stream":
             self.handle_sse()
@@ -1091,6 +1120,50 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 "auto_mounted": os.path.exists(os.path.join(script_dir, GUEST_AUTOMOUNT_MARKER)),
                 "mount_hint": "sudo mkdir -p /mnt/shared && sudo mount -t 9p -o trans=virtio,version=9p2000.L cerise_share /mnt/shared",
             })
+        elif self.path == "/api/search/config":
+            try:
+                data = self._read_json_body()
+            except Exception:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            mode = data.get("mode", "").strip()
+            provider = data.get("provider", "").strip()
+            api_key = data.get("api_key", "").strip()
+            if mode not in ("disabled", "auto", "manual"):
+                self.send_json({"error": "Invalid mode"}, 400)
+                return
+            if provider not in ("tavily",):
+                self.send_json({"error": "Invalid provider"}, 400)
+                return
+            with state.lock:
+                state.search_config["mode"] = mode
+                state.search_config["provider"] = provider
+                if api_key and api_key != "***":
+                    state.search_config["api_key"] = api_key
+            print(f"[pipeline_web] Search config updated: mode={mode} provider={provider}", flush=True)
+            broadcast_sse("search_config", {"mode": mode, "provider": provider})
+            self.send_json({"status": "ok", "mode": mode, "provider": provider})
+        elif self.path.startswith("/api/batch/") and self.path.endswith("/search"):
+            try:
+                batch_id = int(self.path.split("/")[-2])
+            except (ValueError, IndexError):
+                self.send_json({"error": "Invalid batch ID"}, 400)
+                return
+            if state.search_config["mode"] != "manual":
+                self.send_json({"error": "Search mode is not set to Manual"}, 400)
+                return
+            with state.lock:
+                batch = next((b for b in state.batches if b["id"] == batch_id), None)
+            if not batch:
+                self.send_json({"error": "Batch not found"}, 404)
+                return
+            if batch["status"] not in ("complete", "error"):
+                self.send_json({"error": "Batch is still being analyzed"}, 409)
+                return
+            batch["status"] = "queued"
+            broadcast_sse("batch_requeued", {"id": batch["id"], "status": "queued"})
+            analysis_queue.put((batch, True))
+            self.send_json({"status": "queued"})
         else:
             self.send_error(404)
     def handle_export_zip(self):

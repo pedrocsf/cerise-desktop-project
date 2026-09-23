@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(BASE_DIR, "virtual_machine"))
 
 from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block, build_process_tree_block
 from pipeline_web import state, send_to_llm, _llm_sync
+from search_enrichment import NO_SEARCH_TEXT
 
 BATCH_DIR = os.path.join(BASE_DIR, "synthetic_batches")
 RUBRIC_FILE = os.path.join(BASE_DIR, "rubric.md")
@@ -112,6 +113,7 @@ def main():
         prompt = PROMPT_TEMPLATE.format(
             rag_context=format_rag_block(retrieval),
             process_tree=build_process_tree_block(batch_data.splitlines()),
+            search_context=NO_SEARCH_TEXT,
             log_content=batch_data,
         )
         t0 = time.time()

@@ -3,6 +3,7 @@ import sys
 
 from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block, build_process_tree_block
 from llama import send_for_analysis
+from search_enrichment import NO_SEARCH_TEXT
 
 
 def clear_screen():
@@ -53,6 +54,7 @@ def main():
             full_prompt = PROMPT_TEMPLATE.format(
                 rag_context=format_rag_block(retrieval),
                 process_tree=build_process_tree_block(user_input.splitlines()),
+                search_context=NO_SEARCH_TEXT,
                 log_content=user_input,
             )
 

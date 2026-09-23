@@ -55,6 +55,8 @@ SEVERITY must start from the Base Criticality Level of whichever retrieved categ
 
 ANALYSIS must (a) state whether you agree with each retrieved category above, and (b) cite at least one concrete piece of evidence from the input (process name, pid, path, ip:port, or similar) supporting the verdict.
 
+External Search Results, when present below, are open-source intelligence about a specific indicator (IP, hash, or domain) found in this batch, not verified fact. Treat them the same way as a retrieved category: weigh them against the raw log, and if a source contradicts the raw log evidence, trust the raw log. If you rely on one, cite it in ANALYSIS by its indicator or domain, not the full URL.
+
 Format that you need to follow:
 VERDICT: <SAFE/SUSPICIOUS/THREAT>
 SEVERITY: <1-5>
@@ -65,6 +67,9 @@ ANALYSIS: <Short explanation>
 
 ### Process Tree:
 {process_tree}
+
+### External Search Results:
+{search_context}
 
 ### Input Logs:
 {log_content}

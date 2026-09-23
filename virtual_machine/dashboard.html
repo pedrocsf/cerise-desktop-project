@@ -843,22 +843,23 @@
         </div>
         <div id="llm-config-msg" style="font-size:11px;margin-top:6px;min-height:14px"></div>
 
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:18px 0 10px;border-top:1px solid rgba(250,250,250,0.06);padding-top:14px">Web Search Enrichment</div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:18px 0 10px;border-top:1px solid rgba(250,250,250,0.06);padding-top:14px">External Search</div>
         <div style="display:flex;gap:6px;margin-bottom:8px">
           <select id="search-mode" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none">
             <option value="disabled">Disabled</option>
             <option value="auto">Automatic</option>
             <option value="manual">Manual</option>
           </select>
-          <select id="search-provider" style="background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none">
-            <option value="tavily">Tavily</option>
-          </select>
         </div>
         <div style="position:relative;margin-bottom:8px">
-          <input id="search-api-key" type="password" placeholder="Tavily API Key" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:7px 30px 7px 10px;border-radius:10px;font-size:12px;outline:none;box-sizing:border-box">
-          <span onclick="toggleSearchKeyVisibility()" style="position:absolute;right:8px;top:7px;cursor:pointer;font-size:12px;color:var(--muted)" title="Show/hide">👁</span>
+          <input id="search-abuseipdb-key" type="password" placeholder="AbuseIPDB API Key (IPs)" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:7px 30px 7px 10px;border-radius:10px;font-size:12px;outline:none;box-sizing:border-box">
+          <span onclick="toggleSearchKeyVisibility('search-abuseipdb-key')" style="position:absolute;right:8px;top:7px;cursor:pointer;font-size:12px;color:var(--muted)" title="Show/hide">👁</span>
         </div>
-        <div style="font-size:10px;color:var(--muted);margin-bottom:8px">Automatic: the LLM decides per batch if a detected indicator (IP/hash/domain) is worth searching. Manual: a button on each batch lets you trigger the search yourself.</div>
+        <div style="position:relative;margin-bottom:8px">
+          <input id="search-virustotal-key" type="password" placeholder="VirusTotal API Key (IPs, domains and hashes)" style="width:100%;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:7px 30px 7px 10px;border-radius:10px;font-size:12px;outline:none;box-sizing:border-box">
+          <span onclick="toggleSearchKeyVisibility('search-virustotal-key')" style="position:absolute;right:8px;top:7px;cursor:pointer;font-size:12px;color:var(--muted)" title="Show/hide">👁</span>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px">Automatic: every public indicator outside known benign infrastructure (public DNS resolvers, Ubuntu/Debian mirrors, package registries) is checked on each batch. Manual: a button on each batch checks all detected indicators. Lookups are exact reputation queries — IPs on AbuseIPDB and VirusTotal, domains and hashes on VirusTotal — and each answer is cached for 6 hours. Any key can be left empty — indicator types without a provider are just skipped.</div>
         <button onclick="saveSearchConfig()" style="width:100%;background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(225,29,72,0.3)">Apply</button>
         <div id="search-config-msg" style="font-size:11px;margin-top:6px;min-height:14px"></div>
       </div>
@@ -1165,14 +1166,14 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     function renderSearchButton(b) {
       if (currentSearchMode !== 'manual') return '';
       if (b.status !== 'complete' && b.status !== 'error') return '';
-      return `<button id="batch-search-btn-${b.id}" onclick="triggerBatchSearch(${b.id})" style="background:none;border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:var(--pill);font-size:12px;cursor:pointer;margin-top:10px">🔍 Search Internet</button>`;
+      return `<button id="batch-search-btn-${b.id}" onclick="triggerBatchSearch(${b.id})" style="background:none;border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:var(--pill);font-size:12px;cursor:pointer;margin-top:10px">🔍 External Search</button>`;
     }
 
     function triggerBatchSearch(id) {
       const btn = document.getElementById(`batch-search-btn-${id}`);
       if (btn) { btn.disabled = true; btn.textContent = '⏳ Searching...' }
       fetch(`/api/batch/${id}/search`, { method: 'POST' }).then(r => r.json()).then(d => {
-        if (d.error) { if (btn) { btn.disabled = false; btn.textContent = '🔍 Search Internet' } alert(d.error) }
+        if (d.error) { if (btn) { btn.disabled = false; btn.textContent = '🔍 External Search' } alert(d.error) }
       });
     }
 
@@ -1326,21 +1327,21 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     });
     // --- end LLM Config ---
 
-    // --- Web Search Config ---
-    function toggleSearchKeyVisibility() {
-      const f = document.getElementById('search-api-key');
+    // --- External Search Config ---
+    function toggleSearchKeyVisibility(fieldId) {
+      const f = document.getElementById(fieldId);
       f.type = f.type === 'password' ? 'text' : 'password';
     }
 
     function saveSearchConfig() {
       const msg = document.getElementById('search-config-msg');
       const mode = document.getElementById('search-mode').value;
-      const provider = document.getElementById('search-provider').value;
-      const api_key = document.getElementById('search-api-key').value.trim();
+      const abuseipdb_api_key = document.getElementById('search-abuseipdb-key').value.trim();
+      const virustotal_api_key = document.getElementById('search-virustotal-key').value.trim();
       fetch('/api/search/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, provider, api_key })
+        body: JSON.stringify({ mode, abuseipdb_api_key, virustotal_api_key })
       }).then(r => r.json()).then(d => {
         if (d.error) { msg.style.color = 'var(--red)'; msg.textContent = d.error; return; }
         msg.style.color = 'var(--green)'; msg.textContent = 'Saved!';
@@ -1352,9 +1353,8 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     fetch('/api/search/config').then(r => r.json()).then(cfg => {
       currentSearchMode = cfg.mode;
       document.getElementById('search-mode').value = cfg.mode;
-      document.getElementById('search-provider').value = cfg.provider;
     });
-    // --- end Web Search Config ---
+    // --- end External Search Config ---
 
     function exportBatches() {
       const btn = document.getElementById('export-zip-btn');

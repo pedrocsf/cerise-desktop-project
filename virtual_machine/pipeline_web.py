@@ -25,7 +25,7 @@ from search_enrichment import (
     enrich_automatic,
     enrich_manual,
     format_search_block,
-    get_search_provider,
+    get_reputation_providers,
 )
 
 SERIAL_PORTS_FILE = "serial_ports.list"
@@ -94,7 +94,11 @@ class PipelineState:
             "api_key": "",
         }
         self.vm_config = {"ram_mb": 8192, "cpus": 6}
-        self.search_config = {"mode": "disabled", "provider": "tavily", "api_key": ""}
+        self.search_config = {
+            "mode": "disabled",
+            "abuseipdb_api_key": "",
+            "virustotal_api_key": "",
+        }
 
     def get_status(self):
         with self.lock:
@@ -721,7 +725,7 @@ _CLAIM_PATTERNS = {
 }
 _SHARED_PATTERNS = {
     "ip": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
-    "path": re.compile(r"/(?:[\w.\-]+/)*[\w.\-]+"),
+    "path": re.compile(r"(?<!\d)/(?=[\w.\-/]*[A-Za-z])(?:[\w.\-]+/)*[\w.\-]*[\w\-]"),
     "hash": re.compile(r"\b[a-fA-F0-9]{32}\b|\b[a-fA-F0-9]{40}\b|\b[a-fA-F0-9]{64}\b"),
 }
 _ANY_NUMBER = re.compile(r"\b\d+\b")
@@ -790,12 +794,14 @@ def run_analysis(batch, force_manual_search=False):
     broadcast_sse("rag_context", {"batch_id": batch["id"], **batch["rag"]})
 
     search_result = None
-    if force_manual_search:
-        provider = get_search_provider(state.search_config["provider"], state.search_config["api_key"])
-        search_result = enrich_manual(batch_data, provider)
-    elif state.search_config["mode"] == "auto":
-        provider = get_search_provider(state.search_config["provider"], state.search_config["api_key"])
-        search_result = enrich_automatic(batch_data, _llm_sync, provider)
+    if force_manual_search or state.search_config["mode"] == "auto":
+        reputation_providers = get_reputation_providers(
+            state.search_config["abuseipdb_api_key"], state.search_config["virustotal_api_key"]
+        )
+        if force_manual_search:
+            search_result = enrich_manual(batch_data, reputation_providers)
+        else:
+            search_result = enrich_automatic(batch_data, reputation_providers)
 
     with state.lock:
         batch["search"] = search_result
@@ -824,7 +830,10 @@ def run_analysis(batch, force_manual_search=False):
             state.analysis_busy = False
             duration = round(time.time() - state.analysis_start_time, 1)
             if text:
-                warnings = check_factual_consistency(batch_data, text)
+                verified_sources = batch_data
+                if search_result and search_result.get("performed"):
+                    verified_sources = batch_data + "\n" + format_search_block(search_result)
+                warnings = check_factual_consistency(verified_sources, text)
                 if warnings:
                     text = text + "\n\n⚠ Não confirmado no log bruto: " + ", ".join(warnings)
                 if hyde_degraded:
@@ -955,7 +964,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/api/search/config":
             with state.lock:
                 cfg = dict(state.search_config)
-            cfg["api_key"] = "***" if cfg["api_key"] else ""
+            for key_field in ("abuseipdb_api_key", "virustotal_api_key"):
+                cfg[key_field] = "***" if cfg[key_field] else ""
             self.send_json(cfg)
         elif self.path == "/api/stream":
             self.handle_sse()
@@ -1127,22 +1137,20 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": "Invalid JSON"}, 400)
                 return
             mode = data.get("mode", "").strip()
-            provider = data.get("provider", "").strip()
-            api_key = data.get("api_key", "").strip()
+            abuseipdb_api_key = data.get("abuseipdb_api_key", "").strip()
+            virustotal_api_key = data.get("virustotal_api_key", "").strip()
             if mode not in ("disabled", "auto", "manual"):
                 self.send_json({"error": "Invalid mode"}, 400)
                 return
-            if provider not in ("tavily",):
-                self.send_json({"error": "Invalid provider"}, 400)
-                return
             with state.lock:
                 state.search_config["mode"] = mode
-                state.search_config["provider"] = provider
-                if api_key and api_key != "***":
-                    state.search_config["api_key"] = api_key
-            print(f"[pipeline_web] Search config updated: mode={mode} provider={provider}", flush=True)
-            broadcast_sse("search_config", {"mode": mode, "provider": provider})
-            self.send_json({"status": "ok", "mode": mode, "provider": provider})
+                if abuseipdb_api_key and abuseipdb_api_key != "***":
+                    state.search_config["abuseipdb_api_key"] = abuseipdb_api_key
+                if virustotal_api_key and virustotal_api_key != "***":
+                    state.search_config["virustotal_api_key"] = virustotal_api_key
+            print(f"[pipeline_web] Search config updated: mode={mode}", flush=True)
+            broadcast_sse("search_config", {"mode": mode})
+            self.send_json({"status": "ok", "mode": mode})
         elif self.path.startswith("/api/batch/") and self.path.endswith("/search"):
             try:
                 batch_id = int(self.path.split("/")[-2])

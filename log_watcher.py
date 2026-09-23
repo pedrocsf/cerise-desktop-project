@@ -55,7 +55,7 @@ SEVERITY must start from the Base Criticality Level of whichever retrieved categ
 
 ANALYSIS must (a) state whether you agree with each retrieved category above, and (b) cite at least one concrete piece of evidence from the input (process name, pid, path, ip:port, or similar) supporting the verdict.
 
-External Search Results, when present below, are open-source intelligence about a specific indicator (IP, hash, or domain) found in this batch, not verified fact. Treat them the same way as a retrieved category: weigh them against the raw log, and if a source contradicts the raw log evidence, trust the raw log. If you rely on one, cite it in ANALYSIS by its indicator or domain, not the full URL.
+External Search Results, when present below, are open-source intelligence about a specific indicator (IP, hash, or domain) found in this batch, not verified fact. Treat them the same way as a retrieved category: weigh them against the raw log, and if a source contradicts the raw log evidence, trust the raw log. If you rely on one, cite it in ANALYSIS by its indicator or domain, not the full URL. Reputation results (AbuseIPDB, VirusTotal) start with a fixed assessment: clean, negligible, suspicious, malicious, or unknown. Rely on that assessment, not on the raw counts after it. A clean, negligible, or unknown assessment is not evidence of a threat, since a single antivirus engine flagging an indicator is common noise; judge that indicator from the raw log alone. Only a suspicious or malicious assessment may reinforce a THREAT verdict, and only when the raw log shows behavior consistent with it.
 
 Format that you need to follow:
 VERDICT: <SAFE/SUSPICIOUS/THREAT>

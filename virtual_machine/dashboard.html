@@ -862,6 +862,17 @@
         <div style="font-size:10px;color:var(--muted);margin-bottom:8px">Automatic: every public indicator outside known benign infrastructure (public DNS resolvers, Ubuntu/Debian mirrors, package registries) is checked on each batch. Manual: a button on each batch checks all detected indicators. Lookups are exact reputation queries — IPs on AbuseIPDB and VirusTotal, domains and hashes on VirusTotal — and each answer is cached for 6 hours. Any key can be left empty — indicator types without a provider are just skipped.</div>
         <button onclick="saveSearchConfig()" style="width:100%;background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(225,29,72,0.3)">Apply</button>
         <div id="search-config-msg" style="font-size:11px;margin-top:6px;min-height:14px"></div>
+
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:18px 0 10px;border-top:1px solid rgba(250,250,250,0.06);padding-top:14px">MITRE ATT&CK Mapping</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <select id="attack-enabled" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none">
+            <option value="off">Off</option>
+            <option value="on">On</option>
+          </select>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px">Asks the LLM for ATT&CK technique IDs on new analyses. IDs are validated, but a valid ID can still be unrelated to the log.</div>
+        <button onclick="saveAttackConfig()" style="width:100%;background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(225,29,72,0.3)">Apply</button>
+        <div id="attack-config-msg" style="font-size:11px;margin-top:6px;min-height:14px"></div>
       </div>
 
       <div class="chat-messages" id="chat-messages">
@@ -1163,6 +1174,19 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       return `<div style="font-size:12px;font-weight:600;margin-bottom:8px;margin-top:16px;color:var(--muted)">EXTERNAL SEARCH RESULTS</div><div class="response-box">${body}</div>`;
     }
 
+    function renderAttackBlock(b) {
+      const a = b.attack;
+      if (!a) return '';
+      let body;
+      if (!a.techniques.length && !a.rejected.length) {
+        body = '<span style="color:var(--muted)">No technique reported for this batch.</span>';
+      } else {
+        body = a.techniques.map(t => `<div style="margin:4px 0;font-size:12px"><a href="${t.url}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;font-family:var(--font-mono)">${escapeHtml(t.id)}</a> ${escapeHtml(t.name)} <span style="color:var(--muted)">· ${t.tactics.map(escapeHtml).join(', ')}</span>${t.replaces ? `<span style="color:var(--muted);font-size:11px"> (LLM cited revoked ${escapeHtml(t.replaces)})</span>` : ''}</div>`).join('');
+        if (a.rejected.length) body += `<div style="margin-top:8px;font-size:11px;color:var(--muted)">Discarded: ${a.rejected.map(r => `<span style="font-family:var(--font-mono)">${escapeHtml(r.id)}</span> — ${escapeHtml(r.reason)}`).join('; ')}</div>`;
+      }
+      return `<div style="font-size:12px;font-weight:600;margin-bottom:8px;margin-top:16px;color:var(--muted)">MITRE ATT&CK <span style="font-weight:400">(Enterprise v${escapeHtml(a.version)}, IDs validated for existence and platform, not for relevance to the log)</span></div><div class="response-box">${body}</div>`;
+    }
+
     function renderSearchButton(b) {
       if (currentSearchMode !== 'manual') return '';
       if (b.status !== 'complete' && b.status !== 'error') return '';
@@ -1177,13 +1201,13 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       });
     }
 
-    function selectBatch(id) {
-      activeBatchId = id; renderBatchList(); switchTab('detail');
+    function selectBatch(id, stayOnTab) {
+      activeBatchId = id; renderBatchList(); if (!stayOnTab) switchTab('detail');
       fetch(`/api/batch/${id}`).then(r => r.json()).then(b => {
         const idx = batches.findIndex(x => x.id === b.id);
         if (idx >= 0) batches[idx].search = b.search;
         let ev = b.events.slice(-50).map(e => `<div class="event-line" style="font-size:11px">${escapeHtml(e)}</div>`).join('');
-        detailContainer.innerHTML = `<div class="batch-detail-header"><h3>Batch #${b.id}</h3><div style="font-size:12px;color:var(--muted)">${b.event_count} events · Status: ${b.status} · Duration: ${b.duration || 0}s · Tokens: ${b.tokens || 0}</div></div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">EVENTS (last 50)</div><div class="events-box">${ev}</div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">ANALYSIS RESPONSE</div><div class="response-box" id="batch-response-${b.id}">${b.response ? escapeHtml(b.response) : '<span style="color:var(--muted)">Waiting for analysis...</span>'}</div><div id="batch-search-wrap-${b.id}">${renderSearchBlock(b)}${renderSearchButton(b)}</div>`;
+        detailContainer.innerHTML = `<div class="batch-detail-header"><h3>Batch #${b.id}</h3><div style="font-size:12px;color:var(--muted)">${b.event_count} events · Status: ${b.status} · Duration: ${b.duration || 0}s · Tokens: ${b.tokens || 0}</div></div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">EVENTS (last 50)</div><div class="events-box">${ev}</div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">ANALYSIS RESPONSE</div><div class="response-box" id="batch-response-${b.id}">${b.response ? escapeHtml(b.response) : '<span style="color:var(--muted)">Waiting for analysis...</span>'}</div><div id="batch-attack-wrap-${b.id}">${renderAttackBlock(b)}</div><div id="batch-search-wrap-${b.id}">${renderSearchBlock(b)}${renderSearchButton(b)}</div>`;
       });
     }
 
@@ -1227,17 +1251,19 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     });
     evtSource.addEventListener('analysis_done', e => {
       const d = JSON.parse(e.data); const idx = batches.findIndex(b => b.id === d.batch_id);
-      if (idx >= 0) { batches[idx].status = d.status; batches[idx].duration = d.duration; batches[idx].tokens = d.tokens; batches[idx].response = d.response } renderBatchList();
+      if (idx >= 0) { batches[idx].status = d.status; batches[idx].duration = d.duration; batches[idx].tokens = d.tokens; batches[idx].response = d.response; batches[idx].attack = d.attack } renderBatchList();
       if (activeBatchId === d.batch_id && idx >= 0) {
         const el = document.getElementById(`batch-response-${d.batch_id}`);
         if (el) el.textContent = d.response;
+        const attackWrap = document.getElementById(`batch-attack-wrap-${d.batch_id}`);
+        if (attackWrap) attackWrap.innerHTML = renderAttackBlock(batches[idx]);
         const wrap = document.getElementById(`batch-search-wrap-${d.batch_id}`);
         if (wrap) wrap.innerHTML = renderSearchBlock(batches[idx]) + renderSearchButton(batches[idx]);
       }
     });
     evtSource.addEventListener('analysis_start', e => {
       const d = JSON.parse(e.data);
-      if (activeBatchId === d.batch_id) { const el = document.getElementById(`batch-response-${d.batch_id}`); if (el) el.innerHTML = '<span style="color:var(--muted)">Analyzing...</span>' }
+      if (activeBatchId === d.batch_id) { const el = document.getElementById(`batch-response-${d.batch_id}`); if (el) el.innerHTML = '<span style="color:var(--muted)">Analyzing...</span>'; const aw = document.getElementById(`batch-attack-wrap-${d.batch_id}`); if (aw) aw.innerHTML = '' }
     });
     evtSource.addEventListener('chat_token', e => { const d = JSON.parse(e.data); if (currentChatBotMsg) currentChatBotMsg.textContent += d.token; chatMessages.scrollTop = chatMessages.scrollHeight });
     evtSource.addEventListener('chat_done', () => { chatSend.disabled = false; currentChatBotMsg = null });
@@ -1355,6 +1381,32 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       document.getElementById('search-mode').value = cfg.mode;
     });
     // --- end External Search Config ---
+
+    function saveAttackConfig() {
+      const msg = document.getElementById('attack-config-msg');
+      const enabled = document.getElementById('attack-enabled').value === 'on';
+      fetch('/api/attack/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+      }).then(r => r.json()).then(d => {
+        if (d.error) { msg.style.color = 'var(--red)'; msg.textContent = d.error; return }
+        msg.style.color = 'var(--green)'; msg.textContent = 'Saved! Applies to new analyses.';
+      });
+    }
+
+    fetch('/api/attack/config').then(r => r.json()).then(cfg => {
+      document.getElementById('attack-enabled').value = cfg.enabled ? 'on' : 'off';
+    });
+    evtSource.addEventListener('attack_config', e => {
+      const d = JSON.parse(e.data);
+      document.getElementById('attack-enabled').value = d.enabled ? 'on' : 'off';
+      if (!d.refresh) return;
+      fetch('/api/batches').then(r => r.json()).then(l => {
+        batches = l; renderBatchList();
+        if (activeBatchId !== null) selectBatch(activeBatchId, true);
+      });
+    });
 
     function exportBatches() {
       const btn = document.getElementById('export-zip-btn');

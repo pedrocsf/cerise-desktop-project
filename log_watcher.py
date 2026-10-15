@@ -36,6 +36,14 @@ List, one per line, the distinct security-relevant actions present (max 5). Each
 ### Response:
 """
 
+ATTACK_INSTRUCTION = (
+    "ATTACK must list the MITRE ATT&CK Enterprise technique IDs (format T#### for a technique or T####.### "
+    "for a sub-technique) for behavior the raw input logs directly show on this Linux host, separated by commas. "
+    "Prefer the most specific sub-technique when the log supports it. Do not list a technique that only the "
+    "retrieved context or the External Search Results suggest without a matching event in the raw log. "
+    "Write NONE when VERDICT is SAFE or when no technique is directly evidenced.\n\n"
+)
+
 PROMPT_TEMPLATE = """### Instruction:
 Act as a cybersecurity analyst. Review the logs below for malicious activity based on the provided context.
 
@@ -76,6 +84,19 @@ ANALYSIS: <Short explanation>
 
 ### Response:
 """
+
+
+def build_prompt_template(attack_enabled=False):
+    if not attack_enabled:
+        return PROMPT_TEMPLATE
+    marker = "Format that you need to follow:\n"
+    severity_line = "SEVERITY: <1-5>\n"
+    return (
+        PROMPT_TEMPLATE
+        .replace(marker, ATTACK_INSTRUCTION + marker, 1)
+        .replace(severity_line, severity_line + "ATTACK: <comma-separated technique IDs, or NONE>\n", 1)
+    )
+
 
 
 def _tokenize(text):

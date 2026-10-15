@@ -19,7 +19,8 @@ import shutil
 import collections
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from log_watcher import RagRetriever, PROMPT_TEMPLATE, format_rag_block, build_process_tree_block
+from log_watcher import RagRetriever, build_prompt_template, format_rag_block, build_process_tree_block
+from attack_mapping import map_attack
 from search_enrichment import (
     NO_SEARCH_TEXT,
     enrich_automatic,
@@ -94,6 +95,7 @@ class PipelineState:
             "api_key": "",
         }
         self.vm_config = {"ram_mb": 8192, "cpus": 6}
+        self.attack_config = {"enabled": False}
         self.search_config = {
             "mode": "disabled",
             "abuseipdb_api_key": "",
@@ -126,6 +128,7 @@ class PipelineState:
                 "llm_provider": self.llm_config["provider"],
                 "llm_model": self.llm_config["model"],
                 "search_mode": self.search_config["mode"],
+                "attack_enabled": self.attack_config["enabled"],
                 "rag_ready": rag_ready.is_set() and rag_retriever is not None,
                 "hyde_degraded_count": self.hyde_degraded_count,
                 "vnc_running": self.vnc_running,
@@ -779,6 +782,7 @@ def run_analysis(batch, force_manual_search=False):
             "hyde_degraded": False,
         }
 
+    attack_enabled = state.attack_config["enabled"]
     hyde_degraded = bool(retrieval.get("hyde_degraded"))
     with state.lock:
         batch["rag"] = {
@@ -807,7 +811,7 @@ def run_analysis(batch, force_manual_search=False):
         batch["search"] = search_result
     broadcast_sse("search_context", {"batch_id": batch["id"], "search": search_result})
 
-    prompt = PROMPT_TEMPLATE.format(
+    prompt = build_prompt_template(attack_enabled).format(
         rag_context=format_rag_block(retrieval),
         process_tree=process_tree,
         search_context=format_search_block(search_result),
@@ -842,10 +846,12 @@ def run_analysis(batch, force_manual_search=False):
                 batch["response"] = text
                 batch["status"] = "complete"
                 batch["factual_warnings"] = warnings
+                batch["attack"] = map_attack(text) if attack_enabled else None
             else:
                 batch["response"] = f"Error: {error}"
                 batch["status"] = "error"
                 batch["factual_warnings"] = []
+                batch["attack"] = None
             batch["duration"] = duration
 
         broadcast_sse("analysis_done", {
@@ -854,7 +860,8 @@ def run_analysis(batch, force_manual_search=False):
             "duration": duration,
             "tokens": batch["tokens"],
             "response": batch["response"],
-            "factual_warnings": batch["factual_warnings"]
+            "factual_warnings": batch["factual_warnings"],
+            "attack": batch["attack"],
         })
 
     send_to_llm(prompt, on_token, on_done)
@@ -960,6 +967,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 cfg = dict(state.vm_config)
                 cfg["vm_running"] = state.vm_running
             cfg["disk_size_gb"] = get_disk_size_gb()
+            self.send_json(cfg)
+        elif self.path == "/api/attack/config":
+            with state.lock:
+                cfg = dict(state.attack_config)
             self.send_json(cfg)
         elif self.path == "/api/search/config":
             with state.lock:
@@ -1130,6 +1141,23 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 "auto_mounted": os.path.exists(os.path.join(script_dir, GUEST_AUTOMOUNT_MARKER)),
                 "mount_hint": "sudo mkdir -p /mnt/shared && sudo mount -t 9p -o trans=virtio,version=9p2000.L cerise_share /mnt/shared",
             })
+        elif self.path == "/api/attack/config":
+            try:
+                data = self._read_json_body()
+            except Exception:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            enabled = data.get("enabled")
+            if not isinstance(enabled, bool):
+                self.send_json({"error": "Invalid value for enabled"}, 400)
+                return
+            with state.lock:
+                state.attack_config["enabled"] = enabled
+            if DEMO_MODE:
+                apply_demo_attack_variant(enabled)
+            print(f"[pipeline_web] ATT&CK mapping config updated: enabled={enabled}", flush=True)
+            broadcast_sse("attack_config", {"enabled": enabled, "refresh": DEMO_MODE})
+            self.send_json({"status": "ok", "enabled": enabled})
         elif self.path == "/api/search/config":
             try:
                 data = self._read_json_body()
@@ -1338,6 +1366,35 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
+DEMO_VARIANTS = {"main": {}}
+DEMO_ATTACK_IDS_MAIN = [
+    "NONE",
+    "T1003.008",
+    "T1068",
+    "T1620",
+    "T1571, T1071",
+    "T1611",
+    "T1070.002, T1070.003",
+]
+
+
+def _build_demo_variants(response, attack_ids, tokens):
+    with_attack = re.sub(r"(SEVERITY: \d\n)", lambda m: m.group(1) + f"ATTACK: {attack_ids}\n", response, count=1)
+    return {
+        "off": {"response": response, "attack": None, "tokens": tokens},
+        "on": {"response": with_attack, "attack": map_attack(with_attack), "tokens": tokens + 10},
+    }
+
+
+def apply_demo_attack_variant(enabled):
+    key = "on" if enabled else "off"
+    with state.lock:
+        for b in state.batches:
+            variants = DEMO_VARIANTS["main"].get(b["id"])
+            if variants:
+                b.update(variants[key])
+
+
 def seed_demo_batches():
     now = time.time()
     ts = [now - (7 - i) * 40 for i in range(7)]
@@ -1526,11 +1583,15 @@ def seed_demo_batches():
             "events": b["events"],
             "event_count": len(b["events"]),
             "response": b["response"],
+            "attack": None,
             "status": "complete",
             "tokens": b["tokens"],
             "duration": b["duration"],
             "rag": b["rag"],
         })
+
+    for batch, ids in zip(batches, DEMO_ATTACK_IDS_MAIN):
+        DEMO_VARIANTS["main"][batch["id"]] = _build_demo_variants(batch["response"], ids, batch["tokens"])
 
     with state.lock:
         state.batches = batches

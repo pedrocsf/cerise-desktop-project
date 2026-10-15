@@ -17,6 +17,7 @@ import io
 import mimetypes
 import shutil
 import collections
+import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from log_watcher import RagRetriever, build_prompt_template, format_rag_block, build_process_tree_block
@@ -74,6 +75,8 @@ class PipelineState:
         self.current_batch = []
         self.batches = []
         self.batch_counter = 0
+        self.external_batches = []
+        self.external_counter = 0
         self.sse_clients = {}
         self.lock = threading.Lock()
         self.analysis_busy = False
@@ -118,6 +121,8 @@ class PipelineState:
                 "analysis_busy": self.analysis_busy,
                 "analysis_tokens": self.analysis_tokens,
                 "analysis_elapsed": round(time.time() - self.analysis_start_time, 1) if self.analysis_busy else 0,
+                "external_busy": external_channel.analysis_busy,
+                "external_count": len(self.external_batches),
                 "chat_busy": self.chat_busy,
                 "chat_tokens": self.chat_tokens,
                 "chat_elapsed": round(time.time() - self.chat_start_time, 1) if self.chat_busy else 0,
@@ -141,6 +146,11 @@ class PipelineState:
 
 
 state = PipelineState()
+external_channel = types.SimpleNamespace(analysis_busy=False, analysis_tokens=0, analysis_start_time=0)
+external_queue = queue.Queue()
+EXTERNAL_MAX_LINES = 5000
+EXTERNAL_MAX_CHARS = 400000
+EXTERNAL_ANALYSIS_LINES = 100
 
 rag_retriever = None
 rag_ready = threading.Event()
@@ -684,6 +694,48 @@ def analysis_worker_thread():
         analysis_queue.task_done()
 
 
+def external_worker_thread():
+    while True:
+        item = external_queue.get()
+        if item is None:
+            break
+        batch, force_manual_search = item
+        try:
+            run_analysis(batch, force_manual_search=force_manual_search, external=True)
+        except Exception as e:
+            print(f"[pipeline_web] External analysis worker error: {e}", flush=True)
+        external_queue.task_done()
+
+
+def create_external_batch(label, text):
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    with state.lock:
+        state.external_counter += 1
+        batch = {
+            "id": state.external_counter,
+            "label": label or f"External #{state.external_counter}",
+            "timestamp": time.time(),
+            "events": lines,
+            "event_count": len(lines),
+            "analyzed_events": min(len(lines), EXTERNAL_ANALYSIS_LINES),
+            "response": "",
+            "status": "queued",
+            "tokens": 0,
+            "duration": 0,
+        }
+        state.external_batches.append(batch)
+    broadcast_sse("ext_batch_created", {
+        "id": batch["id"],
+        "label": batch["label"],
+        "timestamp": batch["timestamp"],
+        "event_count": batch["event_count"],
+        "analyzed_events": batch["analyzed_events"],
+        "status": "queued",
+    })
+    external_queue.put((batch, False))
+    return batch
+
+
 def batch_timer_thread():
     while True:
         time.sleep(1)
@@ -757,17 +809,20 @@ def check_factual_consistency(batch_data, analysis_text):
     return warnings
 
 
-def run_analysis(batch, force_manual_search=False):
-    batch_data = "\n".join(batch["events"][-100:])
-    process_tree = build_process_tree_block(batch["events"][-100:])
+def run_analysis(batch, force_manual_search=False, external=False):
+    chan = external_channel if external else state
+    sse = (lambda name, data: broadcast_sse("ext_" + name, data)) if external else broadcast_sse
+    window = EXTERNAL_ANALYSIS_LINES if external else 100
+    batch_data = "\n".join(batch["events"][-window:])
+    process_tree = build_process_tree_block(batch["events"][-window:])
 
     with state.lock:
-        state.analysis_busy = True
-        state.analysis_tokens = 0
-        state.analysis_start_time = time.time()
+        chan.analysis_busy = True
+        chan.analysis_tokens = 0
+        chan.analysis_start_time = time.time()
         batch["status"] = "analyzing"
 
-    broadcast_sse("analysis_start", {"batch_id": batch["id"]})
+    sse("analysis_start", {"batch_id": batch["id"]})
 
     rag_ready.wait()
     if rag_retriever is not None:
@@ -793,9 +848,9 @@ def run_analysis(batch, force_manual_search=False):
             "categories": [c["category"] for c in (retrieval.get("candidates") or [])],
             "hyde_degraded": hyde_degraded,
         }
-        if hyde_degraded:
+        if hyde_degraded and not external:
             state.hyde_degraded_count += 1
-    broadcast_sse("rag_context", {"batch_id": batch["id"], **batch["rag"]})
+    sse("rag_context", {"batch_id": batch["id"], **batch["rag"]})
 
     search_result = None
     if force_manual_search or state.search_config["mode"] == "auto":
@@ -809,7 +864,7 @@ def run_analysis(batch, force_manual_search=False):
 
     with state.lock:
         batch["search"] = search_result
-    broadcast_sse("search_context", {"batch_id": batch["id"], "search": search_result})
+    sse("search_context", {"batch_id": batch["id"], "search": search_result})
 
     prompt = build_prompt_template(attack_enabled).format(
         rag_context=format_rag_block(retrieval),
@@ -820,19 +875,19 @@ def run_analysis(batch, force_manual_search=False):
 
     def on_token(token):
         with state.lock:
-            state.analysis_tokens += 1
-            batch["tokens"] = state.analysis_tokens
-        broadcast_sse("analysis_token", {
+            chan.analysis_tokens += 1
+            batch["tokens"] = chan.analysis_tokens
+        sse("analysis_token", {
             "batch_id": batch["id"],
             "token": token,
-            "token_count": state.analysis_tokens,
-            "elapsed": round(time.time() - state.analysis_start_time, 1)
+            "token_count": chan.analysis_tokens,
+            "elapsed": round(time.time() - chan.analysis_start_time, 1)
         })
 
     def on_done(text, error):
         with state.lock:
-            state.analysis_busy = False
-            duration = round(time.time() - state.analysis_start_time, 1)
+            chan.analysis_busy = False
+            duration = round(time.time() - chan.analysis_start_time, 1)
             if text:
                 verified_sources = batch_data
                 if search_result and search_result.get("performed"):
@@ -854,7 +909,7 @@ def run_analysis(batch, force_manual_search=False):
                 batch["attack"] = None
             batch["duration"] = duration
 
-        broadcast_sse("analysis_done", {
+        sse("analysis_done", {
             "batch_id": batch["id"],
             "status": batch["status"],
             "duration": duration,
@@ -942,6 +997,33 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 return
             with state.lock:
                 batch = next((b for b in state.batches if b["id"] == batch_id), None)
+            if batch:
+                self.send_json(batch)
+            else:
+                self.send_json({"error": "Batch not found"}, 404)
+        elif self.path == "/api/external":
+            with state.lock:
+                items = [{
+                    "id": b["id"],
+                    "label": b["label"],
+                    "timestamp": b["timestamp"],
+                    "event_count": b["event_count"],
+                    "analyzed_events": b["analyzed_events"],
+                    "status": b["status"],
+                    "duration": b.get("duration", 0),
+                    "tokens": b.get("tokens", 0),
+                    "response": b.get("response", ""),
+                    "search_performed": bool((b.get("search") or {}).get("performed")),
+                } for b in state.external_batches]
+            self.send_json(items)
+        elif self.path.startswith("/api/external/"):
+            try:
+                batch_id = int(self.path.split("/")[-1])
+            except ValueError:
+                self.send_json({"error": "Invalid batch ID"}, 400)
+                return
+            with state.lock:
+                batch = next((b for b in state.external_batches if b["id"] == batch_id), None)
             if batch:
                 self.send_json(batch)
             else:
@@ -1179,6 +1261,46 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             print(f"[pipeline_web] Search config updated: mode={mode}", flush=True)
             broadcast_sse("search_config", {"mode": mode})
             self.send_json({"status": "ok", "mode": mode})
+        elif self.path == "/api/external":
+            try:
+                data = self._read_json_body()
+                text = str(data.get("logs", ""))
+                label = str(data.get("label", "")).strip()[:80]
+            except Exception:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            if not text.strip():
+                self.send_json({"error": "No log content provided"}, 400)
+                return
+            if len(text) > EXTERNAL_MAX_CHARS:
+                self.send_json({"error": f"Input too large (max {EXTERNAL_MAX_CHARS} characters)"}, 413)
+                return
+            if len([ln for ln in text.splitlines() if ln.strip()]) > EXTERNAL_MAX_LINES:
+                self.send_json({"error": f"Too many lines (max {EXTERNAL_MAX_LINES})"}, 413)
+                return
+            batch = create_external_batch(label, text)
+            self.send_json({"status": "queued", "id": batch["id"]})
+        elif self.path.startswith("/api/external/") and self.path.endswith("/search"):
+            try:
+                batch_id = int(self.path.split("/")[-2])
+            except (ValueError, IndexError):
+                self.send_json({"error": "Invalid batch ID"}, 400)
+                return
+            if state.search_config["mode"] != "manual":
+                self.send_json({"error": "Search mode is not set to Manual"}, 400)
+                return
+            with state.lock:
+                batch = next((b for b in state.external_batches if b["id"] == batch_id), None)
+            if not batch:
+                self.send_json({"error": "Batch not found"}, 404)
+                return
+            if batch["status"] not in ("complete", "error"):
+                self.send_json({"error": "Batch is still being analyzed"}, 409)
+                return
+            batch["status"] = "queued"
+            broadcast_sse("ext_batch_requeued", {"id": batch["id"], "status": "queued"})
+            external_queue.put((batch, True))
+            self.send_json({"status": "queued"})
         elif self.path.startswith("/api/batch/") and self.path.endswith("/search"):
             try:
                 batch_id = int(self.path.split("/")[-2])
@@ -1366,7 +1488,7 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
-DEMO_VARIANTS = {"main": {}}
+DEMO_VARIANTS = {"main": {}, "external": {}}
 DEMO_ATTACK_IDS_MAIN = [
     "NONE",
     "T1003.008",
@@ -1375,6 +1497,10 @@ DEMO_ATTACK_IDS_MAIN = [
     "T1571, T1071",
     "T1611",
     "T1070.002, T1070.003",
+]
+DEMO_ATTACK_IDS_EXTERNAL = [
+    "T1059.012, T1489, T1486",
+    "NONE",
 ]
 
 
@@ -1389,10 +1515,11 @@ def _build_demo_variants(response, attack_ids, tokens):
 def apply_demo_attack_variant(enabled):
     key = "on" if enabled else "off"
     with state.lock:
-        for b in state.batches:
-            variants = DEMO_VARIANTS["main"].get(b["id"])
-            if variants:
-                b.update(variants[key])
+        for scope, items in (("main", state.batches), ("external", state.external_batches)):
+            for b in items:
+                variants = DEMO_VARIANTS[scope].get(b["id"])
+                if variants:
+                    b.update(variants[key])
 
 
 def seed_demo_batches():
@@ -1590,12 +1717,120 @@ def seed_demo_batches():
             "rag": b["rag"],
         })
 
+    external_raw = [
+        {
+            "label": "Sample B - ESXi locker",
+            "age": 95,
+            "events": [
+                "08:02:05.164969 UTC pid=163 procname=xargs func=execve exec_path=./uswW7SbL arg1=--encryption_path=/vmfs/volumes",
+                "08:02:05.166286 UTC pid=161 procname=xargs func=fork ret=163",
+                "08:02:05.170538 UTC pid=163 procname=uswW7SbL func=readlink buffer=/root/guild/uswW7SbL",
+                "08:02:05.249822 UTC pid=163 procname=uswW7SbL func=fork ret=164",
+                "08:02:05.301177 UTC pid=164 procname=sh func=execve exec_path=/bin/sh arg1=-c arg2=esxcli vm process list",
+                "08:02:05.388410 UTC pid=166 procname=sh func=execve exec_path=/bin/sh arg1=-c arg2=esxcli vm process kill --type=force --world-id=5337229",
+                "08:02:05.452903 UTC pid=168 procname=sh func=execve exec_path=/bin/sh arg1=-c arg2=pkill -9 vmx-*",
+                "08:02:05.611045 UTC pid=163 procname=uswW7SbL func=open file_path=/vmfs/volumes/53e0ce7b-4dc3d26a/web01/web01.vmdk flags=O_RDWR",
+                "08:02:05.611512 UTC pid=163 procname=uswW7SbL func=write fd=3 size=1048576",
+                "08:02:05.704288 UTC pid=163 procname=uswW7SbL func=rename old=/vmfs/volumes/53e0ce7b-4dc3d26a/web01/web01.vmdk new=/vmfs/volumes/53e0ce7b-4dc3d26a/web01/web01.vmdk.akira",
+                "08:02:05.704901 UTC pid=163 procname=uswW7SbL func=rename old=/vmfs/volumes/53e0ce7b-4dc3d26a/web01/web01.vmx new=/vmfs/volumes/53e0ce7b-4dc3d26a/web01/web01.vmx.akira",
+                "08:02:05.705377 UTC pid=163 procname=uswW7SbL func=rename old=/vmfs/volumes/53e0ce7b-4dc3d26a/web01/web01.nvram new=/vmfs/volumes/53e0ce7b-4dc3d26a/web01/web01.nvram.akira",
+                "08:02:05.731660 UTC pid=163 procname=uswW7SbL func=open file_path=/vmfs/volumes/53e0ce7b-4dc3d26a/web01/akira_readme.txt flags=O_WRONLY|O_CREAT",
+                "08:02:05.790214 UTC pid=163 procname=uswW7SbL func=connect ip=203.0.113.58 port=12132 ret=0",
+            ],
+            "response": (
+                "VERDICT: THREAT\n"
+                "SEVERITY: 5\n"
+                "ANALYSIS: The log shows the full execution phase of a hypervisor-targeting ransomware. The binary "
+                "uswW7SbL (PID 163) was started with --encryption_path=/vmfs/volumes, then its child shells ran "
+                "esxcli vm process list, esxcli vm process kill --type=force --world-id=5337229 and pkill -9 vmx-*, "
+                "which releases the file locks held by running virtual machines before encryption. The same process "
+                "then renamed web01.vmdk, web01.vmx and web01.nvram to the same .akira suffix and created "
+                "akira_readme.txt in that directory, matching the ransomware category (Base Criticality Level 5) at "
+                "HIGH confidence. A single outbound connect to 203.0.113.58:12132 follows, and the External Search "
+                "assessment for that address is malicious, which reinforces the verdict since the raw log shows the "
+                "process itself opening the connection. The log shows file writes and renames, but not the content "
+                "of the files, so encryption is strongly suspected rather than confirmed, and no data exfiltration "
+                "is shown. Isolating the host and its datastore access is the immediate action."
+            ),
+            "rag": {"category": "ransomware", "confidence": "HIGH", "score": 3.12, "dense_similarity": 0.78, "categories": ["ransomware", "suspicious_exec"], "hyde_degraded": False},
+            "search": {
+                "performed": True,
+                "terms": ["203.0.113.58"],
+                "sources": [
+                    {
+                        "term": "203.0.113.58",
+                        "title": "AbuseIPDB assessment: malicious — 96% abuse confidence, 41 report(s) in the last 180 days",
+                        "url": "https://www.abuseipdb.com/check/203.0.113.58",
+                        "snippet": "ISP: Example Hosting Ltd · Country: NL · Usage: Data Center/Web Hosting/Transit · Last reported: 2026-10-12T09:31:07+00:00",
+                    },
+                    {
+                        "term": "203.0.113.58",
+                        "title": "VirusTotal assessment: malicious — 14/94 engines flagged this IP as malicious (3 suspicious)",
+                        "url": "https://www.virustotal.com/gui/ip-address/203.0.113.58",
+                        "snippet": "AS owner: Example Hosting Ltd · Country: NL · Community reputation: -18",
+                    },
+                ],
+                "note": None,
+            },
+            "tokens": 318, "duration": 7.4,
+        },
+        {
+            "label": "Sample C - nightly backup job",
+            "age": 40,
+            "events": [
+                "2026-10-14T02:00:01 cron[612]: (backup) CMD (/usr/local/bin/nightly-backup.sh)",
+                "2026-10-14T02:00:02 pid=2210 comm=nightly-backup.sh execve /usr/bin/rsync -a --delete /srv/data /mnt/backup/daily",
+                "2026-10-14T02:00:02 pid=2211 comm=rsync open /srv/data/reports/q3.xlsx O_RDONLY",
+                "2026-10-14T02:00:03 pid=2211 comm=rsync open /srv/data/reports/q3.xlsx O_RDONLY",
+                "2026-10-14T02:00:09 pid=2212 comm=rsync write /mnt/backup/daily/reports/q3.xlsx",
+                "2026-10-14T02:03:40 pid=2230 comm=tar execve /usr/bin/tar -czf /mnt/backup/weekly/srv-data.tar.gz /srv/data",
+                "2026-10-14T02:03:41 pid=2231 comm=gzip write /mnt/backup/weekly/srv-data.tar.gz",
+                "2026-10-14T02:09:12 pid=2210 comm=nightly-backup.sh exit status=0",
+            ],
+            "response": (
+                "VERDICT: SAFE\n"
+                "SEVERITY: 1\n"
+                "ANALYSIS: All activity belongs to a scheduled backup job. cron (PID 612) started "
+                "nightly-backup.sh, which ran rsync -a --delete from /srv/data to /mnt/backup/daily and tar -czf to "
+                "produce srv-data.tar.gz, then exited with status 0. The files are read from the source and written "
+                "to the backup destination under their original names, with no uniform suffix applied to the "
+                "source tree, no ransom note, no virtual machine or process termination commands and no outbound "
+                "network events. This is consistent with the normal backup and archive patterns, so no category "
+                "was triggered. No further action needed."
+            ),
+            "rag": {"category": "UNKNOWN", "confidence": "LOW", "score": 0.09, "dense_similarity": 0.12, "categories": [], "hyde_degraded": False},
+            "search": {"performed": False, "terms": [], "sources": [], "note": "No public indicators found in this batch."},
+            "tokens": 156, "duration": 3.9,
+        },
+    ]
+    external_batches = []
+    for i, b in enumerate(external_raw):
+        external_batches.append({
+            "id": i + 1,
+            "label": b["label"],
+            "timestamp": now - b["age"],
+            "events": b["events"],
+            "event_count": len(b["events"]),
+            "analyzed_events": len(b["events"]),
+            "response": b["response"],
+            "attack": None,
+            "search": b["search"],
+            "status": "complete",
+            "tokens": b["tokens"],
+            "duration": b["duration"],
+            "rag": b["rag"],
+        })
+
     for batch, ids in zip(batches, DEMO_ATTACK_IDS_MAIN):
         DEMO_VARIANTS["main"][batch["id"]] = _build_demo_variants(batch["response"], ids, batch["tokens"])
+    for batch, ids in zip(external_batches, DEMO_ATTACK_IDS_EXTERNAL):
+        DEMO_VARIANTS["external"][batch["id"]] = _build_demo_variants(batch["response"], ids, batch["tokens"])
 
     with state.lock:
         state.batches = batches
         state.batch_counter = len(batches)
+        state.external_batches = external_batches
+        state.external_counter = len(external_batches)
         state.total_events = ebpf_total + network_total
         state.ebpf_count = ebpf_total
         state.network_count = network_total
@@ -1637,6 +1872,7 @@ def main():
         print(f"[pipeline_web] ttyd spawned on {TTYD_HOST}:{TTYD_PORT} (PID {state.ttyd_proc.pid})")
 
     threading.Thread(target=analysis_worker_thread, daemon=True).start()
+    threading.Thread(target=external_worker_thread, daemon=True).start()
     threading.Thread(target=batch_timer_thread, daemon=True).start()
     threading.Thread(target=vm_metrics_thread, daemon=True).start()
 

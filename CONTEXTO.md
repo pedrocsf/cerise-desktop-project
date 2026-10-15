@@ -335,3 +335,28 @@ Mapeamento de cada veredito para técnicas do ATT&CK Enterprise, com validação
 - **Estado anterior (pausado)**: a instrução e a linha `ATTACK` foram retiradas do `PROMPT_TEMPLATE`; `ATTACK_SECTION_VISIBLE = false` em `dashboard.html`; os seeds do demo não têm linha `ATTACK`. `pipeline_web.py` continua chamando `map_attack`, mas sem a linha na resposta o resultado é vazio. **Nada disso foi commitado ainda.**
 - **Decisão pendente com o usuário**: **escolha restrita**. Cada categoria do RAG ganharia uma lista curta de técnicas Linux candidatas; o prompt ofereceria só as candidatas das categorias recuperadas, e a validação rejeitaria qualquer ID fora delas. Prós, contras e alternativas estão no `MITRE.md`, seção 6.
 
+---
+
+## 19. External Logs (análise isolada de logs inseridos manualmente)
+
+Permite ao analista colar ou carregar de arquivo logs externos pela interface e analisá-los com o mesmo pipeline (RAG + prompt + External Search), **sem tocar no fluxo principal**. Caso de uso: a VM está detonando o objeto A e o analista quer analisar em paralelo um log do objeto B, sem que um contamine a análise do outro.
+
+- **Interface**: aba **External Logs** no topo do `dashboard.html`. Tem campo de label, textarea, botão "Load file" (lê `.txt/.log/.json/.csv` no navegador) e botão Analyze. Abaixo ficam a lista das análises externas e o detalhe (logs, resposta em streaming, severidade, bloco de External Search).
+- **Isolamento** (o ponto central do desenho):
+  - O batch externo vive em `state.external_batches` com contador próprio (`state.external_counter`). Nunca entra em `state.batches`, `state.current_batch`, `state.batch_counter` nem nos contadores de eventos. O timer de batch (`batch_timer_thread`, que usa `state.batches[-1]`) não o vê, e o export `batches.zip` também não o inclui.
+  - O prompt recebe só as linhas do próprio batch. O `RagRetriever` e o HyDE não guardam estado entre chamadas, então não há memória cruzada entre o externo e os batches ao vivo.
+  - `run_analysis(batch, force_manual_search, external=True)` usa um canal de contadores separado (`external_channel`: busy, tokens, tempo), por isso o indicador de análise do fluxo principal não é afetado. Também não incrementa `hyde_degraded_count`.
+  - Fila (`external_queue`) e thread (`external_worker_thread`) próprias: um batch externo não espera na fila do fluxo principal e nem o atrasa na fila. Os externos são serializados entre si.
+- **API**:
+  - `POST /api/external` com `{label, logs}`. Responde `{status, id}`. Retorna 400 para entrada vazia e 413 acima de `EXTERNAL_MAX_LINES` (5000) ou `EXTERNAL_MAX_CHARS` (400000).
+  - `GET /api/external` (lista) e `GET /api/external/<id>` (completo).
+  - `POST /api/external/<id>/search` para a External Search manual, só com o modo em Manual.
+  - SSE com prefixo `ext_`: `ext_batch_created`, `ext_batch_requeued`, `ext_analysis_start`, `ext_analysis_token`, `ext_analysis_done`, `ext_search_context`. O `/api/status` ganhou `external_busy` e `external_count`.
+- **Limitações conhecidas**:
+  - Só as **últimas 100 linhas** são analisadas (`EXTERNAL_ANALYSIS_LINES`, o mesmo corte do fluxo principal). A UI avisa quando há truncamento.
+  - O externo roda em paralelo ao fluxo principal. Com Ollama local isso disputa CPU/GPU e pode deixar os dois mais lentos.
+  - Sem persistência: os batches externos somem ao reiniciar o servidor.
+  - Com External Search em modo Auto, IPs e domínios do log externo também consomem cota do AbuseIPDB/VirusTotal.
+  - Os logs colados não passam pelo parser de canal: não há prefixo `[ebpf:...]`/`[network:...]` garantido, e a qualidade do retrieval depende de o log se parecer com a telemetria do MalTrace.
+- **Modo demo**: `seed_demo_batches()` também popula 2 análises externas prontas: "Sample B - ESXi locker" (THREAT 5, categoria `ransomware`, com External Search mostrando AbuseIPDB e VirusTotal para um IP de documentação 203.0.113.58) e "Sample C - nightly backup job" (SAFE 1, backup legítimo com rsync/tar). Os 7 batches principais continuam independentes delas.
+- **Teste feito** (modo demo, `llama3.1:8b-instruct-q4_K_M`): POST válido e vazio, isolamento (7 batches principais e `current_batch_size` inalterados durante a análise) e caminho completo (`complete`, 385 tokens). Visual da aba não foi validado em navegador.

@@ -636,6 +636,7 @@
     <div class="tabs">
       <div class="tab active" data-tab="overview">Dashboard</div>
       <div class="tab" data-tab="detail">Batch Detail</div>
+      <div class="tab" data-tab="external">External Logs</div>
       <div class="tab" data-tab="vmscreen">VM Screen</div>
     </div>
     <div class="stats">
@@ -720,6 +721,26 @@
         <div class="tab-panel" id="panel-detail">
           <div id="detail-container">
             <div class="empty-state"><span style="font-size:14px">Select a batch from the sidebar</span></div>
+          </div>
+        </div>
+        <div class="tab-panel" id="panel-external">
+          <div class="card">
+            <h3>Analyze External Logs</h3>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Runs as an isolated batch: it does not enter the live batch stream, and live batches never see it.</div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+              <input id="ext-label" type="text" maxlength="80" placeholder="Label (e.g. Sample B)" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:10px;font-size:12px;outline:none">
+              <button onclick="document.getElementById('ext-file-picker').click()" title="Load from file" style="background:none;border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:var(--pill);font-size:12px;cursor:pointer">Load file</button>
+              <input id="ext-file-picker" type="file" accept=".txt,.log,.json,.csv,text/*" style="display:none">
+            </div>
+            <textarea id="ext-logs" rows="10" placeholder="Paste logs here, one event per line" style="width:100%;box-sizing:border-box;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:10px;font-size:12px;font-family:var(--font-mono);outline:none;resize:vertical"></textarea>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px">
+              <span id="ext-status" style="font-size:11px;color:var(--muted)"></span>
+              <button id="ext-submit-btn" onclick="submitExternal()" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px 18px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Analyze</button>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:minmax(200px,260px) 1fr;gap:16px;align-items:start">
+            <div class="card" style="padding:8px"><div id="ext-list"></div></div>
+            <div id="ext-detail"><div class="empty-state"><span style="font-size:14px">Select an external analysis</span></div></div>
           </div>
         </div>
         <div class="tab-panel" id="panel-vmscreen">
@@ -887,7 +908,7 @@
   <script>
     const batchListEl = document.getElementById('batch-list'), detailContainer = document.getElementById('detail-container');
     const chatMessages = document.getElementById('chat-messages'), chatInput = document.getElementById('chat-input'), chatSend = document.getElementById('chat-send');
-    let activeBatchId = null, currentChatBotMsg = null, batches = [];
+    let activeBatchId = null, currentChatBotMsg = null, batches = [], extBatches = [], activeExtId = null;
     let currentSearchMode = 'disabled';
     let eventTimeline = [], ebpfCount = 0, networkCount = 0, portCounts = {};
     let isDemoMode = false;
@@ -1268,6 +1289,117 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     evtSource.addEventListener('chat_token', e => { const d = JSON.parse(e.data); if (currentChatBotMsg) currentChatBotMsg.textContent += d.token; chatMessages.scrollTop = chatMessages.scrollHeight });
     evtSource.addEventListener('chat_done', () => { chatSend.disabled = false; currentChatBotMsg = null });
 
+
+    function extStatusClass(st) { return st === 'complete' ? 'status-complete' : st === 'analyzing' ? 'status-analyzing' : st === 'queued' ? 'status-queued' : 'status-error' }
+    function extStatusIcon(st) { return st === 'complete' ? '✓' : st === 'analyzing' ? '⟳' : st === 'queued' ? '◎' : '✗' }
+
+    function renderExtList() {
+      const el = document.getElementById('ext-list');
+      if (!extBatches.length) { el.innerHTML = '<div class="empty-state" style="padding:24px"><span style="font-size:13px">No external analyses yet</span></div>'; return }
+      el.innerHTML = extBatches.slice().reverse().map(b => {
+        const searchIcon = (b.search_performed || (b.search && b.search.performed)) ? '<span title="External search performed" style="font-size:10px;margin-left:4px">🔍</span>' : '';
+        return `<div class="batch-item ${b.id === activeExtId ? 'active' : ''}" onclick="selectExternal(${b.id})"><div style="display:flex;align-items:center;justify-content:space-between"><div class="batch-id">${escapeHtml(b.label)}${searchIcon}</div>${severityDotClass(b.response)}</div><div class="batch-meta">${b.event_count} lines · ${timeAgo(b.timestamp)}</div><div class="batch-status ${extStatusClass(b.status)}">${extStatusIcon(b.status)} ${b.status}${b.duration ? ' · ' + b.duration + 's' : ''}</div></div>`
+      }).join('');
+    }
+
+    function renderExtSearchButton(b) {
+      if (currentSearchMode !== 'manual') return '';
+      if (b.status !== 'complete' && b.status !== 'error') return '';
+      return `<button id="ext-search-btn-${b.id}" onclick="triggerExternalSearch(${b.id})" style="background:none;border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:var(--pill);font-size:12px;cursor:pointer;margin-top:10px">🔍 External Search</button>`;
+    }
+
+    function triggerExternalSearch(id) {
+      const btn = document.getElementById(`ext-search-btn-${id}`);
+      if (btn) { btn.disabled = true; btn.textContent = '⏳ Searching...' }
+      fetch(`/api/external/${id}/search`, { method: 'POST' }).then(r => r.json()).then(d => {
+        if (d.error) { if (btn) { btn.disabled = false; btn.textContent = '🔍 External Search' } alert(d.error) }
+      });
+    }
+
+    function selectExternal(id) {
+      activeExtId = id; renderExtList();
+      fetch(`/api/external/${id}`).then(r => r.json()).then(b => {
+        const idx = extBatches.findIndex(x => x.id === b.id);
+        if (idx >= 0) { extBatches[idx].search = b.search; extBatches[idx].attack = b.attack }
+        const ev = b.events.slice(-50).map(e => `<div class="event-line" style="font-size:11px">${escapeHtml(e)}</div>`).join('');
+        const trunc = b.event_count > b.analyzed_events ? ` · only the last ${b.analyzed_events} lines were analyzed` : '';
+        document.getElementById('ext-detail').innerHTML = `<div class="batch-detail-header"><h3>${escapeHtml(b.label)}</h3><div style="font-size:12px;color:var(--muted)">${b.event_count} lines${trunc} · Status: ${b.status} · Duration: ${b.duration || 0}s · Tokens: ${b.tokens || 0}</div></div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">LOGS (last 50)</div><div class="events-box">${ev}</div><div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">ANALYSIS RESPONSE</div><div class="response-box" id="ext-response-${b.id}">${b.response ? escapeHtml(b.response) : '<span style="color:var(--muted)">Waiting for analysis...</span>'}</div><div id="ext-attack-wrap-${b.id}">${renderAttackBlock(b)}</div><div id="ext-search-wrap-${b.id}">${renderSearchBlock(b)}${renderExtSearchButton(b)}</div>`;
+      });
+    }
+
+    function submitExternal() {
+      const logs = document.getElementById('ext-logs').value;
+      const label = document.getElementById('ext-label').value.trim();
+      const statusEl = document.getElementById('ext-status'), btn = document.getElementById('ext-submit-btn');
+      if (!logs.trim()) { statusEl.textContent = 'Paste or load some logs first.'; return }
+      btn.disabled = true; statusEl.textContent = 'Submitting...';
+      fetch('/api/external', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label, logs }) })
+        .then(r => r.json().then(d => ({ ok: r.ok, d })))
+        .then(({ ok, d }) => {
+          btn.disabled = false;
+          if (!ok) { statusEl.textContent = d.error || 'Submission failed'; return }
+          statusEl.textContent = 'Queued.';
+          document.getElementById('ext-logs').value = ''; document.getElementById('ext-label').value = '';
+          selectExternal(d.id);
+        })
+        .catch(() => { btn.disabled = false; statusEl.textContent = 'Submission failed' });
+    }
+
+    document.getElementById('ext-file-picker').addEventListener('change', ev => {
+      const f = ev.target.files[0]; if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        document.getElementById('ext-logs').value = reader.result;
+        const lbl = document.getElementById('ext-label'); if (!lbl.value.trim()) lbl.value = f.name;
+      };
+      reader.readAsText(f);
+      ev.target.value = '';
+    });
+
+    function extPatch(id, patch) {
+      const idx = extBatches.findIndex(b => b.id === id);
+      if (idx >= 0) Object.assign(extBatches[idx], patch);
+      return idx;
+    }
+
+    evtSource.addEventListener('ext_batch_created', e => { extBatches.push(JSON.parse(e.data)); renderExtList() });
+    evtSource.addEventListener('ext_batch_requeued', e => {
+      const d = JSON.parse(e.data); const idx = extPatch(d.id, { status: d.status });
+      renderExtList();
+      if (activeExtId === d.id && idx >= 0) {
+        const wrap = document.getElementById(`ext-search-wrap-${d.id}`);
+        if (wrap) wrap.innerHTML = renderSearchBlock(extBatches[idx]) + renderExtSearchButton(extBatches[idx]);
+      }
+    });
+    evtSource.addEventListener('ext_search_context', e => {
+      const d = JSON.parse(e.data); const idx = extPatch(d.batch_id, { search: d.search });
+      if (activeExtId === d.batch_id && idx >= 0) {
+        const wrap = document.getElementById(`ext-search-wrap-${d.batch_id}`);
+        if (wrap) wrap.innerHTML = renderSearchBlock(extBatches[idx]) + renderExtSearchButton(extBatches[idx]);
+      }
+    });
+    evtSource.addEventListener('ext_analysis_start', e => {
+      const d = JSON.parse(e.data); extPatch(d.batch_id, { status: 'analyzing' }); renderExtList();
+      if (activeExtId === d.batch_id) { const el = document.getElementById(`ext-response-${d.batch_id}`); if (el) el.innerHTML = '<span style="color:var(--muted)">Analyzing...</span>'; const aw = document.getElementById(`ext-attack-wrap-${d.batch_id}`); if (aw) aw.innerHTML = '' }
+    });
+    evtSource.addEventListener('ext_analysis_token', e => {
+      const d = JSON.parse(e.data);
+      if (activeExtId === d.batch_id) { const el = document.getElementById(`ext-response-${d.batch_id}`); if (el) { if (el.querySelector('span')) el.innerHTML = ''; el.textContent += d.token } }
+    });
+    evtSource.addEventListener('ext_analysis_done', e => {
+      const d = JSON.parse(e.data);
+      const idx = extPatch(d.batch_id, { status: d.status, duration: d.duration, tokens: d.tokens, response: d.response, attack: d.attack });
+      renderExtList();
+      if (activeExtId === d.batch_id && idx >= 0) {
+        const el = document.getElementById(`ext-response-${d.batch_id}`);
+        if (el) el.textContent = d.response;
+        const attackWrap = document.getElementById(`ext-attack-wrap-${d.batch_id}`);
+        if (attackWrap) attackWrap.innerHTML = renderAttackBlock(extBatches[idx]);
+        const wrap = document.getElementById(`ext-search-wrap-${d.batch_id}`);
+        if (wrap) wrap.innerHTML = renderSearchBlock(extBatches[idx]) + renderExtSearchButton(extBatches[idx]);
+      }
+    });
+
     // --- LLM Config ---
     let currentProvider = 'ollama';
     const cloudHints = {
@@ -1406,6 +1538,10 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
         batches = l; renderBatchList();
         if (activeBatchId !== null) selectBatch(activeBatchId, true);
       });
+      fetch('/api/external').then(r => r.json()).then(l => {
+        extBatches = l; renderExtList();
+        if (activeExtId !== null) selectExternal(activeExtId);
+      });
     });
 
     function exportBatches() {
@@ -1424,6 +1560,7 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     setInterval(pollStatus, 2000);
     pollVmMetrics();
     setInterval(pollVmMetrics, 2000);
+    fetch('/api/external').then(r => r.json()).then(l => { extBatches = l; renderExtList() });
     fetch('/api/batches').then(r => r.json()).then(l => {
       batches = l; renderBatchList();
       if (eventTimeline.length === 0) {

@@ -33,7 +33,7 @@ from search_enrichment import (
 SERIAL_PORTS_FILE = "serial_ports.list"
 BATCH_INTERVAL = 30
 OLLAMA_URL = "http://localhost:11434"
-WEB_HOST = "0.0.0.0"
+WEB_HOST = os.environ.get("MALTRACE_WEB_HOST", "127.0.0.1")
 WEB_PORT = 8080
 VNC_HOST = "127.0.0.1"
 VNC_PORT = 5900
@@ -44,6 +44,7 @@ TTYD_PORT = 7682
 VM_CONTROLLER_BIN = "vm_controller"
 VM_ACTION_TIMEOUT = 30
 DEMO_MODE = os.environ.get("MALTRACE_DEMO") == "1"
+TTYD_ENABLED = os.environ.get("MALTRACE_TTYD") == "1"
 QEMU_PID_FILE = "qemu_vm.pid"
 VM_METRICS_MAXLEN = 90
 VM_METRICS_INTERVAL = 2
@@ -142,6 +143,8 @@ class PipelineState:
                 "vm_busy": self.vm_busy,
                 "vm_last_error": self.vm_last_error,
                 "demo_mode": DEMO_MODE,
+                "ttyd_enabled": TTYD_ENABLED,
+                "ttyd_url": f"http://{TTYD_HOST}:{TTYD_PORT}/" if TTYD_ENABLED else "",
             }
 
 
@@ -185,7 +188,7 @@ def spawn_websockify():
     websockify_bin = shutil.which("websockify") or os.path.join(os.path.dirname(sys.executable), "websockify")
     cmd = [
         websockify_bin,
-        str(NOVNC_WS_PORT),
+        f"{WEB_HOST}:{NOVNC_WS_PORT}",
         f"{VNC_HOST}:{VNC_PORT}",
     ]
     try:
@@ -960,16 +963,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", len(body))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
 
     def do_GET(self):
         if self.path == "/":
@@ -1062,10 +1057,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(cfg)
         elif self.path == "/api/stream":
             self.handle_sse()
-        elif self.path.startswith("/api/files"):
-            self.handle_files()
-        elif self.path.startswith("/api/file?"):
-            self.handle_file_content()
         elif self.path.endswith(".png") or self.path.endswith(".svg"):
             self.serve_static_png()
         elif self.path.startswith("/novnc/"):
@@ -1183,31 +1174,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 "note": "Grow the guest partition/filesystem from inside the VM to use the new space",
             })
         elif self.path == "/api/vm/send-file":
-            content_type = self.headers.get("Content-Type", "")
             script_dir = os.path.dirname(os.path.abspath(__file__))
             shared_dir = os.path.join(script_dir, VM_SHARED_DIRNAME)
             os.makedirs(shared_dir, exist_ok=True)
-            if content_type.startswith("application/json"):
-                try:
-                    data = self._read_json_body()
-                except Exception:
-                    self.send_json({"error": "Invalid JSON"}, 400)
-                    return
-                src_path = (data.get("path") or "").strip()
-                if not src_path or not os.path.isfile(src_path):
-                    self.send_json({"error": "File not found on host"}, 400)
-                    return
-                filename = os.path.basename(src_path)
-                try:
-                    with open(src_path, "rb") as f:
-                        content = f.read()
-                except Exception as e:
-                    self.send_json({"error": str(e)}, 500)
-                    return
-            else:
-                filename = os.path.basename((self.headers.get("X-Filename") or "").strip())
-                length = int(self.headers.get("Content-Length") or 0)
-                content = self.rfile.read(length)
+            filename = os.path.basename((self.headers.get("X-Filename") or "").strip())
+            length = int(self.headers.get("Content-Length") or 0)
+            content = self.rfile.read(length)
             if not filename or not content:
                 self.send_json({"error": "Missing file"}, 400)
                 return
@@ -1345,66 +1317,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/zip")
         self.send_header("Content-Disposition", "attachment; filename=\"batches_export.zip\"")
         self.send_header("Content-Length", len(body))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
-
-    def _project_root(self):
-        return str(pathlib.Path(os.path.dirname(os.path.abspath(__file__))).parent)
-
-    def handle_files(self):
-        from urllib.parse import urlparse, parse_qs
-        parsed = urlparse(self.path)
-        params = parse_qs(parsed.query)
-        rel_path = params.get("path", [""])[0]
-        root = self._project_root()
-        target = os.path.normpath(os.path.join(root, rel_path))
-        if not target.startswith(root):
-            self.send_json({"error": "Access denied"}, 403)
-            return
-        if not os.path.exists(target):
-            self.send_json({"error": "Not found"}, 404)
-            return
-        if os.path.isfile(target):
-            self.send_json({"type": "file", "path": rel_path, "name": os.path.basename(target), "size": os.path.getsize(target)})
-            return
-        entries = []
-        try:
-            for entry in sorted(os.listdir(target)):
-                if entry.startswith('.'):
-                    continue
-                full = os.path.join(target, entry)
-                e_rel = os.path.relpath(full, root)
-                is_dir = os.path.isdir(full)
-                entries.append({"name": entry, "path": e_rel, "is_dir": is_dir, "size": os.path.getsize(full) if not is_dir else 0})
-        except PermissionError:
-            pass
-        entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
-        self.send_json({"type": "directory", "path": rel_path, "entries": entries})
-
-    def handle_file_content(self):
-        from urllib.parse import urlparse, parse_qs
-        parsed = urlparse(self.path)
-        params = parse_qs(parsed.query)
-        rel_path = params.get("path", [""])[0]
-        root = self._project_root()
-        target = os.path.normpath(os.path.join(root, rel_path))
-        if not target.startswith(root):
-            self.send_json({"error": "Access denied"}, 403)
-            return
-        if not os.path.isfile(target):
-            self.send_json({"error": "Not found"}, 404)
-            return
-        try:
-            size = os.path.getsize(target)
-            if size > 500000:
-                self.send_json({"error": "File too large", "size": size}, 400)
-                return
-            with open(target, "r", errors="replace") as f:
-                content = f.read()
-            self.send_json({"path": rel_path, "name": os.path.basename(target), "content": content, "size": size})
-        except Exception as e:
-            self.send_json({"error": str(e)}, 500)
 
     def serve_dashboard(self):
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1464,7 +1378,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
         client_id = id(threading.current_thread())
@@ -1867,7 +1780,9 @@ def main():
         state.vnc_running = True
         print(f"[pipeline_web] websockify spawned on port {NOVNC_WS_PORT} (PID {state.vnc_proc.pid})")
 
-    state.ttyd_proc = spawn_ttyd()
+    state.ttyd_proc = spawn_ttyd() if TTYD_ENABLED else None
+    if not TTYD_ENABLED:
+        print("[pipeline_web] ttyd host terminal disabled (set MALTRACE_TTYD=1 to enable)")
     if state.ttyd_proc:
         print(f"[pipeline_web] ttyd spawned on {TTYD_HOST}:{TTYD_PORT} (PID {state.ttyd_proc.pid})")
 

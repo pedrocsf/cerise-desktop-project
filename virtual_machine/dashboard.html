@@ -715,7 +715,8 @@
           </div>
           <div class="card">
             <h3>Terminal</h3>
-            <iframe src="http://127.0.0.1:7682/" style="width:100%;height:420px;border:1px solid var(--border);border-radius:12px;background:#000" title="Host terminal"></iframe>
+            <iframe id="terminal-frame" style="display:none;width:100%;height:420px;border:1px solid var(--border);border-radius:12px;background:#000" title="Host terminal"></iframe>
+            <div id="terminal-disabled" style="font-size:12px;color:var(--muted);padding:12px 0">Host terminal is disabled. Start the dashboard with MALTRACE_TTYD=1 to enable it.</div>
           </div>
         </div>
         <div class="tab-panel" id="panel-detail">
@@ -762,7 +763,7 @@
           <div class="card">
             <h3>Send File to VM</h3>
             <div style="display:flex;gap:8px;align-items:center">
-              <input id="vm-file-path" type="text" placeholder="/home/user/file.txt" style="flex:1;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:10px;font-size:12px;outline:none">
+              <div id="vm-file-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:var(--surface-sec);border:1px solid var(--border);color:var(--muted);padding:8px 10px;border-radius:10px;font-size:12px">No file selected</div>
               <button onclick="document.getElementById('vm-file-picker').click()" title="Browse local file" style="background:none;border:1px solid var(--border);color:var(--text);width:36px;height:36px;flex-shrink:0;border-radius:10px;cursor:pointer;display:flex;align-items:center;justify-content:center">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
               </button>
@@ -928,21 +929,20 @@
       }
     }
 
-    const vmFilePathInput = document.getElementById('vm-file-path');
+    const vmFileNameEl = document.getElementById('vm-file-name');
     const vmFilePicker = document.getElementById('vm-file-picker');
     const vmFileSendBtn = document.getElementById('vm-file-send-btn');
     let vmPickedFile = null;
 
     function updateVmSendBtnState() {
-      const armed = !!vmPickedFile || vmFilePathInput.value.trim().length > 0;
+      const armed = !!vmPickedFile;
       vmFileSendBtn.disabled = !armed;
       vmFileSendBtn.style.opacity = armed ? '1' : '0.4';
       vmFileSendBtn.style.pointerEvents = armed ? 'auto' : 'none';
     }
-    vmFilePathInput.addEventListener('input', () => { vmPickedFile = null; updateVmSendBtnState() });
     vmFilePicker.addEventListener('change', () => {
       vmPickedFile = vmFilePicker.files[0] || null;
-      if (vmPickedFile) vmFilePathInput.value = vmPickedFile.name;
+      vmFileNameEl.textContent = vmPickedFile ? vmPickedFile.name : 'No file selected';
       updateVmSendBtnState();
     });
 
@@ -951,10 +951,7 @@
       vmFileSendBtn.disabled = true;
       statusEl.style.color = 'var(--muted)';
       statusEl.textContent = 'Sending...';
-      const req = vmPickedFile
-        ? fetch('/api/vm/send-file', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': vmPickedFile.name }, body: vmPickedFile })
-        : fetch('/api/vm/send-file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: vmFilePathInput.value.trim() }) });
-      req.then(r => r.json()).then(d => {
+      fetch('/api/vm/send-file', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': vmPickedFile.name }, body: vmPickedFile }).then(r => r.json()).then(d => {
         if (d.error) { statusEl.style.color = 'var(--red)'; statusEl.textContent = d.error }
         else if (d.auto_mounted) { statusEl.style.color = 'var(--green)'; statusEl.textContent = `Sent. "${d.filename}" will appear automatically at /mnt/shared/${d.filename} inside the VM.` }
         else { statusEl.style.color = 'var(--green)'; statusEl.textContent = `Sent "${d.filename}" to the shared folder. Inside the VM (one-time): ${d.mount_hint}, then find it at /mnt/shared/${d.filename}` }
@@ -1123,6 +1120,12 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
 
     function updateStatus(s) {
       isDemoMode = !!s.demo_mode;
+      if (s.ttyd_enabled) {
+        const terminalFrame = document.getElementById('terminal-frame');
+        if (!terminalFrame.getAttribute('src')) terminalFrame.src = s.ttyd_url;
+        terminalFrame.style.display = 'block';
+        document.getElementById('terminal-disabled').style.display = 'none';
+      }
       if (isDemoMode) { document.getElementById('chat-agent-label').textContent = 'Opus 5' }
       if (isDemoMode && !demoChatRendered) { renderDemoChat(); demoChatRendered = true }
       document.getElementById('stat-events').textContent = s.total_events;

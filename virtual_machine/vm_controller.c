@@ -19,7 +19,7 @@
                      "-cpu host "                                                             \
                      "-drive file=/home/pedro/Downloads/cerise.qcow2,format=qcow2,cache=writeback " \
                      "-virtfs local,path=" VM_SHARED_DIR ",mount_tag=cerise_share,security_model=mapped-xattr,id=cerise_share " \
-                     "-netdev user,id=net0,hostfwd=tcp::2222-:22 "                            \
+                     "-netdev user,id=net0%s,hostfwd=tcp::2222-:22 "                         \
                      "-device e1000,netdev=net0 "                                             \
                      "-device virtio-serial-pci,max_ports=16 "                                \
                      "-chardev pty,id=ch1 "                                                   \
@@ -179,8 +179,13 @@ int start_qemu_vm()
             cpus = v;
     }
 
+    const char *net_isolated_env = getenv("CERISE_NET_ISOLATED");
+    const char *net_restrict = ",restrict=on";
+    if (net_isolated_env && strcmp(net_isolated_env, "0") == 0)
+        net_restrict = "";
+
     char qemu_cmd[8192];
-    snprintf(qemu_cmd, sizeof(qemu_cmd), QEMU_COMMAND_FMT, ram_mb, cpus);
+    snprintf(qemu_cmd, sizeof(qemu_cmd), QEMU_COMMAND_FMT, ram_mb, cpus, net_restrict);
 
     /* Redirect stderr to stdout so we can capture chardev pty assignments */
     char cmd_with_redirect[8224];

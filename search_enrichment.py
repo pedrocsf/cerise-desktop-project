@@ -14,7 +14,6 @@ SNIPPET_MAX_CHARS = 300
 NO_SEARCH_TEXT = "No external search was performed for this batch."
 
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_HASH_RE = re.compile(r"\b[a-fA-F0-9]{32}\b|\b[a-fA-F0-9]{40}\b|\b[a-fA-F0-9]{64}\b")
 _DOMAIN_TLD_BLOCKLIST = {
     "py", "so", "sh", "bt", "md", "js", "json", "log", "txt", "pid", "list",
     "yml", "yaml", "conf", "service", "desktop", "c", "h", "o", "cfg", "ini",
@@ -33,12 +32,11 @@ def _is_public_ip(ip):
 
 def extract_search_candidates(text):
     ips = sorted({ip for ip in _IP_RE.findall(text) if _is_public_ip(ip)})
-    hashes = sorted(set(_HASH_RE.findall(text)))
     domains = sorted({
         m.group(0) for m in _DOMAIN_RE.finditer(text)
         if m.group(1).lower() not in _DOMAIN_TLD_BLOCKLIST
     })
-    return {"ip": ips, "hash": hashes, "domain": domains}
+    return {"ip": ips, "domain": domains}
 
 
 VT_SUSPICIOUS_MIN = 3
@@ -97,9 +95,9 @@ class AbuseIPDBProvider(ReputationProvider):
 
 
 class VirusTotalProvider(ReputationProvider):
-    _API_PATHS = {"hash": "files", "domain": "domains", "ip": "ip_addresses"}
-    _GUI_PATHS = {"hash": "file", "domain": "domain", "ip": "ip-address"}
-    _LABELS = {"hash": "hash", "domain": "domain", "ip": "IP"}
+    _API_PATHS = {"domain": "domains", "ip": "ip_addresses"}
+    _GUI_PATHS = {"domain": "domain", "ip": "ip-address"}
+    _LABELS = {"domain": "domain", "ip": "IP"}
 
     def __init__(self, api_key):
         self.api_key = api_key
@@ -132,14 +130,7 @@ class VirusTotalProvider(ReputationProvider):
             f"VirusTotal assessment: {assessment} — "
             f"{malicious}/{total} engines flagged this {label} as malicious ({suspicious} suspicious)"
         )
-        if kind == "hash":
-            names = attrs.get("names") or ([attrs["meaningful_name"]] if attrs.get("meaningful_name") else [])
-            label_hint = (attrs.get("popular_threat_classification") or {}).get("suggested_threat_label")
-            snippet = (
-                f"Type: {attrs.get('type_description') or '?'} · Known as: {', '.join(names[:3]) or 'n/a'} · "
-                f"Threat label: {label_hint or 'n/a'}"
-            )
-        elif kind == "ip":
+        if kind == "ip":
             snippet = (
                 f"AS owner: {attrs.get('as_owner') or '?'} · Country: {attrs.get('country') or '?'} · "
                 f"Community reputation: {attrs.get('reputation', 0)}"
@@ -154,12 +145,12 @@ class VirusTotalProvider(ReputationProvider):
 
 
 def get_reputation_providers(abuseipdb_api_key, virustotal_api_key):
-    providers = {"ip": [], "hash": [], "domain": []}
+    providers = {"ip": [], "domain": []}
     if abuseipdb_api_key:
         providers["ip"].append(AbuseIPDBProvider(abuseipdb_api_key))
     if virustotal_api_key:
         vt = VirusTotalProvider(virustotal_api_key)
-        for kind in ("ip", "hash", "domain"):
+        for kind in ("ip", "domain"):
             providers[kind].append(vt)
     return {kind: lst for kind, lst in providers.items() if lst}
 

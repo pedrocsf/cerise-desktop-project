@@ -1476,11 +1476,17 @@ def seed_demo_batches():
                 "SEVERITY: 1\n"
                 "ANALYSIS: All observed activity matches routine system maintenance. cron (PID 612) invoked "
                 "logrotate and /etc/cron.daily/apt-compat at their scheduled window, both running as root with "
-                "expected parent/child ancestry from systemd -> cron -> run-parts. No sensitive-file, "
-                "privilege-escalation, or network anomaly categories were triggered. No further action needed."
+                "expected parent/child ancestry from systemd -> cron -> run-parts. The only network event is an "
+                "outbound TCP SYN from unattended-upgr (PID 900, root) to 91.189.91.39:443, which is consistent "
+                "with the apt-compat job checking for package updates over HTTPS. The External Search Results "
+                "for 91.189.91.39 support this reading: AbuseIPDB assesses it as clean, with no abuse reports "
+                "and Canonical Group Limited as the ISP, and VirusTotal assesses it as negligible (likely false "
+                "positive) under the same owner. Neither assessment is evidence of a threat, and the raw log "
+                "shows no behavior that contradicts them. No sensitive-file, privilege-escalation, or network "
+                "anomaly categories were triggered. No further action needed."
             ),
             "rag": {"category": "UNKNOWN", "confidence": "LOW", "score": 0.11, "dense_similarity": 0.14, "categories": [], "hyde_degraded": False},
-            "tokens": 162, "duration": 3.8,
+            "tokens": 247, "duration": 5.4,
         },
         {
             "events": [

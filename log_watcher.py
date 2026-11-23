@@ -1,6 +1,7 @@
 
 import os
 import re
+import time
 import chromadb
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
@@ -26,9 +27,13 @@ MIN_RERANK_SCORE = -4.49
 MAX_CATEGORIES = 3
 
 HYDE_ENABLED = True
+HYDE_LOG_PREFIX = "[hyde]"
+HYDE_ERROR_MARKER = "[ERROR]"
+HYDE_LOG_RESPONSE_MAX_CHARS = 200
+
 HYDE_PROMPT = """### Instruction:
-The input below may contain multiple unrelated security-relevant actions mixed with benign noise (background DNS, ICMP, routine service activity). Input lines are tagged [ebpf] for kernel-level syscall traces or [network:...] for captured network packets.
-List, one per line, the distinct security-relevant actions present (max 5). Each line: a short, plain-English sentence describing what the action does. Ignore benign/routine noise. Do not judge whether any action is malicious. If there is truly only one relevant action, output one line. Output ONLY the list, nothing else.
+The input below is an aggregated summary of all events of a batch, not raw log lines. Each group line gives the sensor and kind, the process name, the number of events (count), distinct pids, a time interval and sample targets. Groups marked [baseline] are routine activity already seen on the clean system. Counts and the number of distinct processes matter: a very large count for one process is itself a security-relevant action.
+List, one per line, the distinct security-relevant actions present (max 5). Each line: a short, plain-English sentence describing what the action does, including the process name and the count when relevant. Ignore benign/routine noise. Do not judge whether any action is malicious. If there is truly only one relevant action, output one line. Output ONLY the list, nothing else.
 
 ### Input:
 {log_content}
@@ -36,34 +41,57 @@ List, one per line, the distinct security-relevant actions present (max 5). Each
 ### Response:
 """
 
+INCIDENT_BLOCK_HEADER = "### Active incident context (earlier batches of this same run):"
+INCIDENT_TIME_FORMAT = "%H:%M:%S"
+INCIDENT_INSTRUCTION = (
+    "An incident was already flagged in earlier batches of this same run (listed above). Classify the current batch "
+    "by the evidence in its own Batch Summary. Activity that continues the incident, processes of the incident that "
+    "are still present, and side effects or residual damage (services going down, mass errors) count as at least "
+    "SUSPICIOUS, and ANALYSIS must say explicitly that the incident is still active. Do not invent new evidence: "
+    "if the current batch shows nothing related, do not raise the verdict because of this context."
+)
+
 ATTACK_INSTRUCTION = (
     "ATTACK must list the MITRE ATT&CK Enterprise technique IDs (format T#### for a technique or T####.### "
-    "for a sub-technique) for behavior the raw input logs directly show on this Linux host, separated by commas. "
+    "for a sub-technique) for behavior the Batch Summary directly shows on this Linux host, separated by commas. "
     "Prefer the most specific sub-technique when the log supports it. Do not list a technique that only the "
-    "retrieved context or the External Search Results suggest without a matching event in the raw log. "
+    "retrieved context or the External Search Results suggest without a matching event in the Batch Summary. "
     "Write NONE when VERDICT is SAFE or when no technique is directly evidenced.\n\n"
 )
 
-PROMPT_TEMPLATE = """### Instruction:
-Act as a cybersecurity analyst. Review the logs below for malicious activity based on the provided context.
+class _PromptTemplate(str):
+    def format(self, *args, **kwargs):
+        kwargs.setdefault("incident_context", "")
+        return str.format(self, *args, **kwargs)
 
-Events tagged [ebpf] are kernel-level syscall traces; events tagged [network:...] are captured network packets. When an ebpf event is followed shortly after by related network activity from the same process, treat them as one causal chain, not independent findings.
 
-When a Process Tree section is present below, treat it as the primary source of causality between processes: it groups the same [ebpf] events by parent/child ancestry (PID/PPID), so a child appearing under a parent means that parent's process spawned it. Use the chronological Input Logs only to confirm timing and to see events the tree does not cover (network activity, and any probe that does not yet report PPID). If the Process Tree section says no ancestry data was available, fall back to inferring causality from timing and process names in the chronological log, as before.
+_PROMPT_TEXT = """### Instruction:
+Act as a cybersecurity analyst. Review the Batch Summary below for malicious activity based on the provided context.
 
-Each category block under Context is a retrieval hypothesis, not a verified fact. Cross-check it against the raw input logs before trusting it:
+The Batch Summary is an aggregated view of ALL events of the batch, not a sample of the latest ones. Groups are listed by sensor and kind, process name, uid and flags, with the event count, the number of distinct pids, the time interval and sample targets. Events tagged [ebpf] are kernel-level syscall traces; events tagged [network:...] are captured network packets, aggregated per flow. When an ebpf group is followed shortly after by related network activity from the same process, treat them as one causal chain, not independent findings. If the section contains raw log lines instead of a summary, read them directly.
+
+How to read the Batch Summary:
+- Counts and the number of distinct processes are evidence, not decoration. An unknown process (not a standard system or user program) performing thousands of file operations (chmod, rename, writes) within seconds is a strong indicator of malicious activity, for example mass file modification or encryption, even when each single event looks benign. Weigh it heavily in both the VERDICT and the SEVERITY.
+- Groups marked [baseline] or [partly baseline] are activity already seen on the clean system. They must not raise the verdict by themselves; only an abnormal volume or new targets inside them can count.
+- Noise from the monitoring stack and the SSH control channel was already removed and is only counted. Do not report it as a finding.
+- A process whose comm appears in parentheses, such as `(imedated)`, with PPID 1, doing a burst of `mount`/`unshare`/`capset` within about 1 second is the normal sandbox setup of a systemd unit (systemd-timedated, systemd-resolved and similar) and must not, by itself, raise the verdict. The summary may mark these groups with `[systemd unit sandbox setup]`. The same burst coming from a process whose PPID is not 1, or that afterwards executes other binaries, remains suspicious.
+- A WARNING about lost events means the sensors dropped events, so every count is a lower bound and the real activity was at least that large.
+
+When a Process Tree section is present below, treat it as the primary source of causality between processes: it groups the most recent [ebpf] events of the batch by parent/child ancestry (PID/PPID), so a child appearing under a parent means that parent's process spawned it. Use the Batch Summary to confirm timing, volume and the events the tree does not cover (network activity, older events, and any probe that does not yet report PPID). If the Process Tree section says no ancestry data was available, fall back to inferring causality from timing and process names in the Batch Summary.
+
+Each category block under Context is a retrieval hypothesis, not a verified fact. Cross-check it against the Batch Summary before trusting it:
 - HIGH confidence: treat its Anomaly Patterns as a strong prior, but still confirm they match the actual input.
-- MEDIUM confidence: treat it only as a hint; weigh the raw log evidence more heavily than the label.
+- MEDIUM confidence: treat it only as a hint; weigh the Batch Summary evidence more heavily than the label.
 - LOW confidence, UNKNOWN category, or a Context block saying no relevant context was found: ignore that category label entirely and analyze the affected input using your own security knowledge.
 If two or more retrieved categories are both plausible, read their Suggested Correlation sections to judge whether the input matches the pattern of them occurring together.
 
 Mark VERDICT as THREAT when you find clear malicious activity (e.g. unauthorized access, suspicious execution, log tampering), SUSPICIOUS when the input matches a Normal Pattern (common false positive) about as plausibly as it matches an Anomaly Pattern, or when correlation with another category would be needed to be sure, or SAFE otherwise.
 
-SEVERITY must start from the Base Criticality Level of whichever retrieved category you judge most relevant (if any), then adjust up or down based on how strongly the raw logs corroborate its Anomaly Patterns and whether multiple categories correlate together. State that adjustment reasoning in ANALYSIS.
+SEVERITY must start from the Base Criticality Level of whichever retrieved category you judge most relevant (if any), then adjust up or down based on how strongly the Batch Summary corroborates its Anomaly Patterns and whether multiple categories correlate together. State that adjustment reasoning in ANALYSIS.
 
-ANALYSIS must (a) state whether you agree with each retrieved category above, and (b) cite at least one concrete piece of evidence from the input (process name, pid, path, ip:port, or similar) supporting the verdict.
+ANALYSIS must (a) state whether you agree with each retrieved category above, and (b) cite at least one concrete piece of evidence from the input (process name, pid, path, ip:port, event count, or similar) supporting the verdict.
 
-External Search Results, when present below, are open-source intelligence about a specific indicator (IP, hash, or domain) found in this batch, not verified fact. Treat them the same way as a retrieved category: weigh them against the raw log, and if a source contradicts the raw log evidence, trust the raw log. If you rely on one, cite it in ANALYSIS by its indicator or domain, not the full URL. Reputation results (AbuseIPDB, VirusTotal) start with a fixed assessment: clean, negligible, suspicious, malicious, or unknown. Rely on that assessment, not on the raw counts after it. A clean, negligible, or unknown assessment is not evidence of a threat, since a single antivirus engine flagging an indicator is common noise; judge that indicator from the raw log alone. Only a suspicious or malicious assessment may reinforce a THREAT verdict, and only when the raw log shows behavior consistent with it.
+External Search Results, when present below, are open-source intelligence about a specific indicator (IP or domain) found in this batch, not verified fact. Treat them the same way as a retrieved category: weigh them against the Batch Summary, and if a source contradicts the batch evidence, trust the batch evidence. If you rely on one, cite it in ANALYSIS by its indicator or domain, not the full URL. Reputation results (AbuseIPDB, VirusTotal) start with a fixed assessment: clean, negligible, suspicious, malicious, or unknown. Rely on that assessment, not on the raw counts after it. A clean, negligible, or unknown assessment is not evidence of a threat, since a single antivirus engine flagging an indicator is common noise; judge that indicator from the Batch Summary alone. Only a suspicious or malicious assessment may reinforce a THREAT verdict, and only when the Batch Summary shows behavior consistent with it.
 
 Format that you need to follow:
 VERDICT: <SAFE/SUSPICIOUS/THREAT>
@@ -78,12 +106,15 @@ ANALYSIS: <Short explanation>
 
 ### External Search Results:
 {search_context}
-
-### Input Logs:
+{incident_context}
+### Batch Summary (all events of the batch, aggregated):
 {log_content}
 
 ### Response:
 """
+
+
+PROMPT_TEMPLATE = _PromptTemplate(_PROMPT_TEXT)
 
 
 def build_prompt_template(attack_enabled=False):
@@ -91,11 +122,24 @@ def build_prompt_template(attack_enabled=False):
         return PROMPT_TEMPLATE
     marker = "Format that you need to follow:\n"
     severity_line = "SEVERITY: <1-5>\n"
-    return (
-        PROMPT_TEMPLATE
+    return _PromptTemplate(
+        _PROMPT_TEXT
         .replace(marker, ATTACK_INSTRUCTION + marker, 1)
         .replace(severity_line, severity_line + "ATTACK: <comma-separated technique IDs, or NONE>\n", 1)
     )
+
+
+def _format_incident_record(record):
+    stamp = time.strftime(INCIDENT_TIME_FORMAT, time.localtime(record["time"]))
+    return (f"- Batch {record['batch_id']} [{record['verdict']}, severity {record['severity']}, "
+            f"{stamp}]: {record['summary']}")
+
+
+def format_incident_block(records):
+    if not records:
+        return ""
+    lines = [_format_incident_record(record) for record in records]
+    return "\n".join(["", INCIDENT_BLOCK_HEADER, *lines, INCIDENT_INSTRUCTION, ""])
 
 
 
@@ -140,13 +184,25 @@ class RagRetriever:
         except Exception as e:
             print(f"Error initializing RAG retriever: {e}\nAnalysis will proceed without RAG context.")
 
-    def _hyde_rewrite(self, log_content):
+    def _hyde_rewrite(self, digest_text):
         if not HYDE_ENABLED:
-            return log_content, False
-        rewritten = self.hyde_llm(HYDE_PROMPT.format(log_content=log_content))
-        if not rewritten or rewritten.strip().startswith("[ERROR]"):
-            return log_content, True
+            return digest_text, False
+        try:
+            rewritten = self.hyde_llm(HYDE_PROMPT.format(log_content=digest_text))
+        except Exception as error:
+            self._log_hyde_degraded(f"{type(error).__name__}: {error}")
+            return digest_text, True
+        if not rewritten or not rewritten.strip():
+            self._log_hyde_degraded("empty response from the LLM")
+            return digest_text, True
+        if rewritten.strip().startswith(HYDE_ERROR_MARKER):
+            self._log_hyde_degraded(f"error response: {rewritten.strip()[:HYDE_LOG_RESPONSE_MAX_CHARS]}")
+            return digest_text, True
         return rewritten.strip(), False
+
+    @staticmethod
+    def _log_hyde_degraded(reason):
+        print(f"{HYDE_LOG_PREFIX} degraded, retrieval will use the digest text without rewriting: {reason}", flush=True)
 
     def _dense_search(self, embed_text, n_results):
         query_embedding = self.encoder.encode(

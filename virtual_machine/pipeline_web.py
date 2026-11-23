@@ -18,9 +18,11 @@ import mimetypes
 import shutil
 import collections
 import types
+import inspect
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from log_watcher import RagRetriever, build_prompt_template, format_rag_block, build_process_tree_block
+from log_watcher import RagRetriever, build_prompt_template, format_rag_block, build_process_tree_block, format_incident_block
+from batch_digest import BaselineProfile, build_digest
 from attack_mapping import map_attack
 from search_enrichment import (
     NO_SEARCH_TEXT,
@@ -50,6 +52,69 @@ VM_METRICS_MAXLEN = 90
 VM_METRICS_INTERVAL = 2
 VM_QCOW2_PATH = "/home/pedro/Downloads/cerise.qcow2"
 VM_SHARED_DIRNAME = "vm_shared"
+NETWORK_CHANNELS = {10}
+LLM_PROVIDERS = ("ollama", "openai", "gemini", "claude")
+CLAUDE_EFFORT_LEVELS = ("", "low", "medium", "high", "xhigh", "max")
+DEFAULT_LLM_PROVIDER = "ollama"
+DEFAULT_LLM_MODEL = "llama3.1:8b-instruct-q4_K_M"
+ENV_LLM_PROVIDER = "MALTRACE_LLM_PROVIDER"
+ENV_LLM_MODEL = "MALTRACE_LLM_MODEL"
+ENV_LLM_EFFORT = "MALTRACE_LLM_EFFORT"
+ENV_LLM_KEY_FILE = "MALTRACE_LLM_KEY_FILE"
+INCIDENT_MAX_RECORDS = 5
+INCIDENT_SUMMARY_MAX_CHARS = 600
+INCIDENT_SUSPICIOUS_MIN_SEVERITY = 4
+VERDICT_THREAT = "THREAT"
+VERDICT_SUSPICIOUS = "SUSPICIOUS"
+VERDICT_PATTERN = re.compile(r"VERDICT[\s*:]*(THREAT|SUSPICIOUS|SAFE)", re.IGNORECASE)
+SEVERITY_PATTERN = re.compile(r"SEVERITY[\s*:]*(\d)", re.IGNORECASE)
+ANALYSIS_PATTERN = re.compile(r"ANALYSIS[\s*:]*(.*)", re.IGNORECASE | re.DOTALL)
+APPENDED_WARNING_MARKER = "\n\n\u26a0"
+
+
+def read_llm_key_file(path):
+    try:
+        with open(path, "r") as key_file:
+            return key_file.read().strip()
+    except OSError as error:
+        print(f"[pipeline_web] ERROR: {ENV_LLM_KEY_FILE} could not be read ({path}): "
+              f"{type(error).__name__}: {error.strerror or error}; the LLM API key stays empty", flush=True)
+        return ""
+
+
+def resolve_llm_provider_and_model(env):
+    provider = env.get(ENV_LLM_PROVIDER, "").strip() or DEFAULT_LLM_PROVIDER
+    model = env.get(ENV_LLM_MODEL, "").strip()
+    if provider not in LLM_PROVIDERS:
+        print(f"[pipeline_web] ERROR: invalid {ENV_LLM_PROVIDER}={provider!r}; using the default "
+              f"{DEFAULT_LLM_PROVIDER}", flush=True)
+        return DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL
+    if model:
+        return provider, model
+    if provider == DEFAULT_LLM_PROVIDER:
+        return provider, DEFAULT_LLM_MODEL
+    print(f"[pipeline_web] ERROR: {ENV_LLM_MODEL} is required for provider {provider}; using the default "
+          f"{DEFAULT_LLM_PROVIDER}", flush=True)
+    return DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL
+
+
+def resolve_llm_effort(env):
+    effort = env.get(ENV_LLM_EFFORT, "").strip().lower()
+    if effort in CLAUDE_EFFORT_LEVELS:
+        return effort
+    print(f"[pipeline_web] ERROR: invalid {ENV_LLM_EFFORT}={effort!r}; effort left at the default", flush=True)
+    return ""
+
+
+def load_llm_config_from_env(env=None):
+    env = os.environ if env is None else env
+    provider, model = resolve_llm_provider_and_model(env)
+    effort = resolve_llm_effort(env)
+    key_file = env.get(ENV_LLM_KEY_FILE, "").strip()
+    api_key = read_llm_key_file(key_file) if key_file else ""
+    print(f"[pipeline_web] LLM config from env: provider={provider} model={model} "
+          f"effort={effort or 'default'} key={'set' if api_key else 'unset'}", flush=True)
+    return {"provider": provider, "model": model, "api_key": api_key, "effort": effort}
 
 
 class PipelineState:
@@ -93,11 +158,10 @@ class PipelineState:
         self.ebpf_count = 0
         self.network_count = 0
         self.hyde_degraded_count = 0
-        self.llm_config = {
-            "provider": "ollama",
-            "model": "llama2",
-            "api_key": "",
-        }
+        self.baseline = {"profile": None, "batch_ids": []}
+        self.llm_config = load_llm_config_from_env()
+        self.monitor_pids = set()
+        self.incident = {"records": [], "active": False}
         self.vm_config = {"ram_mb": 8192, "cpus": 6}
         self.attack_config = {"enabled": False}
         self.search_config = {
@@ -137,6 +201,16 @@ class PipelineState:
                 "attack_enabled": self.attack_config["enabled"],
                 "rag_ready": rag_ready.is_set() and rag_retriever is not None,
                 "hyde_degraded_count": self.hyde_degraded_count,
+                "monitor_pids": sorted(self.monitor_pids),
+                "incident": {
+                    "active": self.incident["active"],
+                    "records": [record["batch_id"] for record in self.incident["records"]],
+                },
+                "baseline": {
+                    "active": self.baseline["profile"] is not None,
+                    "batch_ids": list(self.baseline["batch_ids"]),
+                    "signatures": len(self.baseline["profile"]) if self.baseline["profile"] is not None else 0,
+                },
                 "vnc_running": self.vnc_running,
                 "vnc_ws_port": NOVNC_WS_PORT,
                 "vm_running": self.vm_running,
@@ -154,6 +228,10 @@ external_queue = queue.Queue()
 EXTERNAL_MAX_LINES = 5000
 EXTERNAL_MAX_CHARS = 400000
 EXTERNAL_ANALYSIS_LINES = 100
+PROCESS_TREE_EVENTS = 100
+UNPARSED_FALLBACK_SHARE = 0.5
+EXTERNAL_FALLBACK_HEADER = "== RAW LOG TAIL (last {count} lines; most lines were not recognised as MalTrace telemetry) =="
+BATCH_STATUS_COMPLETE = "complete"
 
 rag_retriever = None
 rag_ready = threading.Event()
@@ -227,6 +305,16 @@ def spawn_ttyd():
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def clear_run_memory_locked():
+    state.monitor_pids = set()
+    state.incident = {"records": [], "active": False}
+
+
+def clear_incident():
+    with state.lock:
+        state.incident = {"records": [], "active": False}
+
+
 def start_listeners(entries):
     with state.lock:
         if state.host_running or state.supervisor_running_count > 0:
@@ -234,9 +322,10 @@ def start_listeners(entries):
         state.ports = [path for _, path in entries]
         state.host_ports = []
         state.supervisor_ports = []
+        clear_run_memory_locked()
         for label, path in entries:
-            num = int("".join(filter(str.isdigit, label)) or "0")
-            if num >= 10:
+            channel = int("".join(filter(str.isdigit, label)) or "0")
+            if channel in NETWORK_CHANNELS:
                 state.supervisor_ports.append(path)
             else:
                 state.host_ports.append(path)
@@ -408,6 +497,7 @@ def vm_start_worker():
             return
         state.vm_busy = True
         state.vm_last_error = ""
+        clear_run_memory_locked()
     broadcast_sse("vm_status", {"vm_running": False, "vm_busy": True})
 
     ensure_guest_automount()
@@ -526,6 +616,9 @@ def reader_thread(proc, source_label, is_supervisor=False):
     broadcast_sse("listener_status", {"source": source_label, "running": still_running})
 
 
+CLAUDE_MAX_TOKENS = 16000
+
+
 def _llm_ollama(prompt, model, on_token, on_done):
     data = {"model": model, "prompt": prompt, "stream": True, "options": {"temperature": 0.0}}
     try:
@@ -598,9 +691,11 @@ def _llm_openai_compat(prompt, model, api_key, base_url, on_token, on_done):
         on_done(None, str(e))
 
 
-def _llm_claude(prompt, model, api_key, on_token, on_done):
+def _llm_claude(prompt, model, api_key, effort, on_token, on_done):
     messages = [{"role": "user", "content": prompt}]
-    data = {"model": model, "max_tokens": 2048, "messages": messages, "stream": True}
+    data = {"model": model, "max_tokens": CLAUDE_MAX_TOKENS, "messages": messages, "stream": True}
+    if effort:
+        data["output_config"] = {"effort": effort}
     try:
         req = urllib.request.Request(
             "https://api.anthropic.com/v1/messages",
@@ -612,6 +707,10 @@ def _llm_claude(prompt, model, api_key, on_token, on_done):
             },
         )
         full = []
+        stop_reason = None
+        stop_details = None
+        input_tokens = None
+        output_tokens = None
         with urllib.request.urlopen(req) as resp:
             for raw in resp:
                 line = raw.decode("utf-8").strip()
@@ -622,12 +721,48 @@ def _llm_claude(prompt, model, api_key, on_token, on_done):
                     chunk = json.loads(payload)
                 except Exception:
                     continue
-                if chunk.get("type") == "content_block_delta":
-                    token = chunk.get("delta", {}).get("text", "")
-                    if token:
-                        full.append(token)
-                        on_token(token)
-        on_done("".join(full), None)
+                event_type = chunk.get("type")
+                if event_type == "content_block_delta":
+                    delta = chunk.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        token = delta.get("text", "")
+                        if token:
+                            full.append(token)
+                            on_token(token)
+                elif event_type == "message_start":
+                    usage = chunk.get("message", {}).get("usage", {})
+                    input_tokens = usage.get("input_tokens", input_tokens)
+                elif event_type == "message_delta":
+                    delta = chunk.get("delta", {})
+                    stop_reason = delta.get("stop_reason", stop_reason)
+                    stop_details = delta.get("stop_details") or chunk.get("stop_details") or stop_details
+                    usage = chunk.get("usage", {})
+                    output_tokens = usage.get("output_tokens", output_tokens)
+                elif event_type == "error":
+                    detail = chunk.get("error", {})
+                    raise RuntimeError(f"Claude stream error ({detail.get('type')}): {detail.get('message')}")
+        print(f"[pipeline_web] Claude usage: model={model} effort={effort or 'default'} "
+              f"in={input_tokens} out={output_tokens} stop={stop_reason}", flush=True)
+        if stop_reason == "refusal":
+            details = stop_details or {}
+            on_done(None, f"Claude refusal (category={details.get('category')}): {details.get('explanation')}")
+            return
+        if stop_reason == "max_tokens":
+            print(f"[pipeline_web] Claude hit max_tokens={CLAUDE_MAX_TOKENS}; response may be truncated", flush=True)
+        text = "".join(full)
+        if not text:
+            on_done(None, f"Claude returned no text (stop={stop_reason}, out={output_tokens})")
+            return
+        on_done(text, None)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        message = body[:500]
+        try:
+            message = json.loads(body).get("error", {}).get("message", message)
+        except Exception:
+            pass
+        print(f"[pipeline_web] Claude HTTP {e.code}: {message}", flush=True)
+        on_done(None, f"Claude HTTP {e.code}: {message}")
     except Exception as e:
         print(f"[pipeline_web] Claude error: {e}", flush=True)
         on_done(None, str(e))
@@ -649,7 +784,7 @@ def send_to_llm(prompt, on_token, on_done):
                            f"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                            on_token, on_done)
     elif provider == "claude":
-        _llm_claude(prompt, model, api_key, on_token, on_done)
+        _llm_claude(prompt, model, api_key, cfg.get("effort", ""), on_token, on_done)
     else:
         on_done(None, f"Unknown provider: {provider}")
 
@@ -660,10 +795,18 @@ def _llm_sync(prompt):
     return out.get("text")
 
 
+def _llm_sync_strict(prompt):
+    out = {}
+    send_to_llm(prompt, lambda _token: None, lambda text, err: out.update({"text": text, "error": err}))
+    if out.get("error"):
+        raise RuntimeError(out["error"])
+    return out.get("text")
+
+
 def init_rag_thread():
     global rag_retriever
     try:
-        rag_retriever = RagRetriever(hyde_llm=_llm_sync)
+        rag_retriever = RagRetriever(hyde_llm=_llm_sync_strict)
     except Exception as e:
         print(f"[pipeline_web] RAG retriever failed to initialize: {e}", flush=True)
     finally:
@@ -720,7 +863,7 @@ def create_external_batch(label, text):
             "timestamp": time.time(),
             "events": lines,
             "event_count": len(lines),
-            "analyzed_events": min(len(lines), EXTERNAL_ANALYSIS_LINES),
+            "analyzed_events": len(lines),
             "response": "",
             "status": "queued",
             "tokens": 0,
@@ -812,24 +955,169 @@ def check_factual_consistency(batch_data, analysis_text):
     return warnings
 
 
+class BaselineError(ValueError):
+    pass
+
+
+def current_baseline_profile():
+    with state.lock:
+        return state.baseline["profile"]
+
+
+def capture_baseline(batch_ids):
+    with state.lock:
+        complete = {b["id"]: b["events"] for b in state.batches if b["status"] == BATCH_STATUS_COMPLETE}
+    if batch_ids is None:
+        selected = sorted(complete)
+    else:
+        missing = sorted({batch_id for batch_id in batch_ids if batch_id not in complete})
+        if missing:
+            raise BaselineError(f"Batches not found or not complete: {missing}")
+        selected = sorted(set(batch_ids))
+    if not selected:
+        raise BaselineError("No complete batches available to capture a baseline")
+    profile = BaselineProfile.from_events(line for batch_id in selected for line in complete[batch_id])
+    with state.lock:
+        state.baseline = {"profile": profile, "batch_ids": selected}
+    return selected, len(profile)
+
+
+def clear_baseline():
+    with state.lock:
+        state.baseline = {"profile": None, "batch_ids": []}
+
+
+def parse_baseline_batch_ids(data):
+    if not isinstance(data, dict):
+        raise BaselineError("Body must be a JSON object")
+    batch_ids = data.get("batch_ids")
+    if batch_ids is None:
+        return None
+    if not isinstance(batch_ids, list) or any(isinstance(item, bool) or not isinstance(item, int) for item in batch_ids):
+        raise BaselineError("batch_ids must be a list of integers")
+    return batch_ids
+
+
+def is_mostly_unparsed(stats):
+    return stats["total"] > 0 and stats["unparsed"] / stats["total"] > UNPARSED_FALLBACK_SHARE
+
+
+def build_analysis_text(events, digest, external):
+    if not (external and is_mostly_unparsed(digest.stats)):
+        return digest.text
+    tail = events[-EXTERNAL_ANALYSIS_LINES:]
+    return "\n".join([digest.text, EXTERNAL_FALLBACK_HEADER.format(count=len(tail)), *tail])
+
+
+def unique_lines_text(events):
+    return "\n".join(dict.fromkeys(events))
+
+
+def fail_batch(batch, error, sse):
+    with state.lock:
+        batch["response"] = f"Error: could not build the batch summary: {type(error).__name__}: {error}"
+        batch["status"] = "error"
+        batch["factual_warnings"] = []
+        batch["attack"] = None
+    sse("analysis_done", {
+        "batch_id": batch["id"],
+        "status": batch["status"],
+        "duration": 0,
+        "tokens": 0,
+        "response": batch["response"],
+        "factual_warnings": [],
+        "attack": None,
+    })
+
+
+def digest_accepts_monitor_pids():
+    return "known_monitor_pids" in inspect.signature(build_digest).parameters
+
+
+def build_main_digest(events):
+    baseline_profile = current_baseline_profile()
+    if not digest_accepts_monitor_pids():
+        return build_digest(events, baseline=baseline_profile)
+    with state.lock:
+        known_monitor_pids = frozenset(state.monitor_pids)
+    return build_digest(events, baseline=baseline_profile, known_monitor_pids=known_monitor_pids)
+
+
+def accumulate_monitor_pids(stats):
+    discovered = stats.get("monitor_pids", [])
+    if not discovered:
+        return
+    with state.lock:
+        state.monitor_pids.update(int(pid) for pid in discovered)
+
+
+def parse_analysis_fields(text):
+    verdict_match = VERDICT_PATTERN.search(text)
+    severity_match = SEVERITY_PATTERN.search(text)
+    analysis_match = ANALYSIS_PATTERN.search(text)
+    verdict = verdict_match.group(1).upper() if verdict_match else None
+    severity = int(severity_match.group(1)) if severity_match else None
+    analysis = analysis_match.group(1).split(APPENDED_WARNING_MARKER)[0] if analysis_match else ""
+    return verdict, severity, " ".join(analysis.split())
+
+
+def is_incident_verdict(verdict, severity):
+    if verdict == VERDICT_THREAT:
+        return True
+    return verdict == VERDICT_SUSPICIOUS and severity is not None and severity >= INCIDENT_SUSPICIOUS_MIN_SEVERITY
+
+
+def record_incident(batch_id, text):
+    verdict, severity, analysis = parse_analysis_fields(text)
+    if not is_incident_verdict(verdict, severity):
+        return
+    record = {
+        "batch_id": batch_id,
+        "verdict": verdict,
+        "severity": severity if severity is not None else 0,
+        "time": time.time(),
+        "summary": analysis[:INCIDENT_SUMMARY_MAX_CHARS],
+    }
+    with state.lock:
+        state.incident["records"] = (state.incident["records"] + [record])[-INCIDENT_MAX_RECORDS:]
+        state.incident["active"] = True
+
+
+def incident_context_text():
+    with state.lock:
+        records = list(state.incident["records"])
+    return format_incident_block(records)
+
+
 def run_analysis(batch, force_manual_search=False, external=False):
     chan = external_channel if external else state
     sse = (lambda name, data: broadcast_sse("ext_" + name, data)) if external else broadcast_sse
-    window = EXTERNAL_ANALYSIS_LINES if external else 100
-    batch_data = "\n".join(batch["events"][-window:])
-    process_tree = build_process_tree_block(batch["events"][-window:])
+    try:
+        if external:
+            digest = build_digest(batch["events"], baseline=None)
+        else:
+            digest = build_main_digest(batch["events"])
+            accumulate_monitor_pids(digest.stats)
+    except Exception as error:
+        fail_batch(batch, error, sse)
+        raise
+    analysis_text = build_analysis_text(batch["events"], digest, external)
+    evidence_text = unique_lines_text(batch["events"])
+    factual_sources = digest.text + "\n" + evidence_text
+    process_tree = build_process_tree_block(batch["events"][-PROCESS_TREE_EVENTS:])
 
     with state.lock:
         chan.analysis_busy = True
         chan.analysis_tokens = 0
         chan.analysis_start_time = time.time()
         batch["status"] = "analyzing"
+        batch["digest_stats"] = digest.stats
 
     sse("analysis_start", {"batch_id": batch["id"]})
 
     rag_ready.wait()
     if rag_retriever is not None:
-        retrieval = rag_retriever.retrieve_context(batch_data)
+        retrieval = rag_retriever.retrieve_context(analysis_text)
     else:
         retrieval = {
             "context": "RAG context is unavailable due to an initialization error.",
@@ -861,9 +1149,9 @@ def run_analysis(batch, force_manual_search=False, external=False):
             state.search_config["abuseipdb_api_key"], state.search_config["virustotal_api_key"]
         )
         if force_manual_search:
-            search_result = enrich_manual(batch_data, reputation_providers)
+            search_result = enrich_manual(evidence_text, reputation_providers)
         else:
-            search_result = enrich_automatic(batch_data, reputation_providers)
+            search_result = enrich_automatic(evidence_text, reputation_providers)
 
     with state.lock:
         batch["search"] = search_result
@@ -873,7 +1161,8 @@ def run_analysis(batch, force_manual_search=False, external=False):
         rag_context=format_rag_block(retrieval),
         process_tree=process_tree,
         search_context=format_search_block(search_result),
-        log_content=batch_data,
+        log_content=analysis_text,
+        incident_context="" if external else incident_context_text(),
     )
 
     def on_token(token):
@@ -887,20 +1176,23 @@ def run_analysis(batch, force_manual_search=False, external=False):
             "elapsed": round(time.time() - chan.analysis_start_time, 1)
         })
 
+    def verify_response(text):
+        verified_sources = factual_sources
+        if search_result and search_result.get("performed"):
+            verified_sources = factual_sources + "\n" + format_search_block(search_result)
+        return check_factual_consistency(verified_sources, text)
+
     def on_done(text, error):
+        warnings = verify_response(text) if text else []
         with state.lock:
             chan.analysis_busy = False
             duration = round(time.time() - chan.analysis_start_time, 1)
             if text:
-                verified_sources = batch_data
-                if search_result and search_result.get("performed"):
-                    verified_sources = batch_data + "\n" + format_search_block(search_result)
-                warnings = check_factual_consistency(verified_sources, text)
                 if warnings:
                     text = text + "\n\n⚠ Não confirmado no log bruto: " + ", ".join(warnings)
                 if hyde_degraded:
-                    text = text + ("\n\n⚠ HyDE indisponível nesta análise: retrieval usou o log bruto "
-                                    "em vez do resumo reescrito (o LLM de reescrita não respondeu).")
+                    text = text + ("\n\n⚠ HyDE indisponível nesta análise: retrieval usou o resumo agregado "
+                                    "sem reescrita (o LLM de reescrita não respondeu).")
                 batch["response"] = text
                 batch["status"] = "complete"
                 batch["factual_warnings"] = warnings
@@ -911,6 +1203,9 @@ def run_analysis(batch, force_manual_search=False, external=False):
                 batch["factual_warnings"] = []
                 batch["attack"] = None
             batch["duration"] = duration
+
+        if not external and batch["status"] == BATCH_STATUS_COMPLETE:
+            record_incident(batch["id"], text)
 
         sse("analysis_done", {
             "batch_id": batch["id"],
@@ -1069,6 +1364,24 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(content_len)
         return json.loads(body)
 
+    def _read_optional_json_body(self):
+        content_len = int(self.headers.get("Content-Length", 0))
+        if content_len == 0:
+            return {}
+        return json.loads(self.rfile.read(content_len))
+
+    def do_DELETE(self):
+        if self.path == "/api/baseline":
+            clear_baseline()
+            print("[pipeline_web] Baseline cleared", flush=True)
+            self.send_json({"status": "ok", "active": False, "batch_ids": [], "signatures": 0})
+        elif self.path == "/api/incident":
+            clear_incident()
+            print("[pipeline_web] Incident memory cleared", flush=True)
+            self.send_json({"status": "ok", "active": False, "records": []})
+        else:
+            self.send_error(404)
+
     def do_POST(self):
         if self.path == "/api/chat":
             try:
@@ -1095,7 +1408,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             provider = data.get("provider", "").strip()
             model = data.get("model", "").strip()
             api_key = data.get("api_key", "").strip()
-            if provider not in ("ollama", "openai", "gemini", "claude"):
+            effort = data.get("effort")
+            if effort is not None:
+                effort = str(effort).strip().lower()
+                if effort not in CLAUDE_EFFORT_LEVELS:
+                    self.send_json({"error": "Invalid effort"}, 400)
+                    return
+            if provider not in LLM_PROVIDERS:
                 self.send_json({"error": "Invalid provider"}, 400)
                 return
             if not model:
@@ -1106,9 +1425,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 state.llm_config["model"] = model
                 if api_key and api_key != "***":
                     state.llm_config["api_key"] = api_key
-            print(f"[pipeline_web] LLM config updated: provider={provider} model={model}", flush=True)
-            broadcast_sse("llm_config", {"provider": provider, "model": model})
-            self.send_json({"status": "ok", "provider": provider, "model": model})
+                if effort is not None:
+                    state.llm_config["effort"] = effort
+                current_effort = state.llm_config["effort"]
+            print(f"[pipeline_web] LLM config updated: provider={provider} model={model} "
+                  f"effort={current_effort or 'default'}", flush=True)
+            broadcast_sse("llm_config", {"provider": provider, "model": model, "effort": current_effort})
+            self.send_json({"status": "ok", "provider": provider, "model": model, "effort": current_effort})
         elif self.path == "/api/vm/start":
             with state.lock:
                 busy, running = state.vm_busy, state.vm_running
@@ -1212,6 +1535,18 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             print(f"[pipeline_web] ATT&CK mapping config updated: enabled={enabled}", flush=True)
             broadcast_sse("attack_config", {"enabled": enabled, "refresh": DEMO_MODE})
             self.send_json({"status": "ok", "enabled": enabled})
+        elif self.path == "/api/baseline/capture":
+            try:
+                batch_ids = parse_baseline_batch_ids(self._read_optional_json_body())
+                selected, signatures = capture_baseline(batch_ids)
+            except BaselineError as error:
+                self.send_json({"error": str(error)}, 400)
+                return
+            except ValueError:
+                self.send_json({"error": "Invalid JSON"}, 400)
+                return
+            print(f"[pipeline_web] Baseline captured from batches {selected}: {signatures} signatures", flush=True)
+            self.send_json({"status": "ok", "active": True, "batch_ids": selected, "signatures": signatures})
         elif self.path == "/api/search/config":
             try:
                 data = self._read_json_body()

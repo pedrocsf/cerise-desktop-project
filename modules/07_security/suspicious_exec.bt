@@ -94,17 +94,33 @@ tracepoint:syscalls:sys_enter_execve
 tracepoint:syscalls:sys_enter_renameat2,
 tracepoint:syscalls:sys_enter_rename
 {
-    $newname = str(args->newname);
-    if (strcontains($newname, "/uploads/") ||
-        strcontains($newname, "/media/") ||
-        strcontains($newname, "/www/") ||
-        strcontains($newname, "/htdocs/"))
+    $path = (uint8 *)args->newname;
+    $index = 0;
+    $served = 0;
+    while ($index < 59)
+    {
+        if (*($path + $index) == 0)
+        {
+            break;
+        }
+        $window = str($path + $index, 10);
+        if (($index <= 54 && strncmp($window, "/uploads/", 9) == 0) ||
+            ($index <= 56 && strncmp($window, "/media/", 7) == 0) ||
+            ($index <= 58 && strncmp($window, "/www/", 5) == 0) ||
+            ($index <= 55 && strncmp($window, "/htdocs/", 8) == 0))
+        {
+            $served = 1;
+            break;
+        }
+        $index += 1;
+    }
+    if ($served)
     {
         $ppid = curtask->real_parent->pid;
         printf("TIME: ");
         time("%H:%M:%S  ");
         printf("COMM: %-16s PID: %-8d PPID: %-8d UID: %-6d RENAME_TO: %s FLAGS: [MOVED_TO_SERVED_DIR]\n",
-               comm, pid, $ppid, uid, $newname);
+               comm, pid, $ppid, uid, str(args->newname));
     }
 }
 

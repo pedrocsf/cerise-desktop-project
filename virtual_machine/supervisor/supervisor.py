@@ -535,7 +535,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    print(json.dumps({"event": "startup", "message": "Network packet sniffer is running"}, ensure_ascii=False, default=str))
+    print(json.dumps({"event": "startup", "message": "Network packet sniffer is running", "pid": os.getpid(), "ppid": os.getppid()}, ensure_ascii=False, default=str))
     sys.stdout.flush()
 
     threading.Thread(target=_auto_traffic_generator, daemon=True).start()

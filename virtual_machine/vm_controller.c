@@ -12,13 +12,16 @@
 #define SERIAL_PORTS_FILE "serial_ports.list"
 #define VM_SHARED_DIR "/home/pedro/Github/cerise-desktop-project/virtual_machine/vm_shared"
 
+#define VIRTFS_ARGS "-virtfs local,path=" VM_SHARED_DIR ",mount_tag=cerise_share,security_model=mapped-xattr,id=cerise_share "
+
 #define QEMU_COMMAND_FMT "qemu-system-x86_64 "                                                \
                      "-m %d "                                                                 \
                      "-smp %d "                                                               \
                      "-machine q35,accel=kvm "                                                \
                      "-cpu host "                                                             \
                      "-drive file=/home/pedro/Downloads/cerise.qcow2,format=qcow2,cache=writeback " \
-                     "-virtfs local,path=" VM_SHARED_DIR ",mount_tag=cerise_share,security_model=mapped-xattr,id=cerise_share " \
+                     "%s"                                                                     \
+                     "%s"                                                                     \
                      "-netdev user,id=net0%s,hostfwd=tcp::2222-:22 "                         \
                      "-device e1000,netdev=net0 "                                             \
                      "-device virtio-serial-pci,max_ports=16 "                                \
@@ -184,8 +187,13 @@ int start_qemu_vm()
     if (net_isolated_env && strcmp(net_isolated_env, "0") == 0)
         net_restrict = "";
 
+    const char *detonation_env = getenv("CERISE_DETONATION");
+    int detonation = detonation_env && strcmp(detonation_env, "1") == 0;
+    const char *snapshot_args = detonation ? "-snapshot " : "";
+    const char *virtfs_args = detonation ? "" : VIRTFS_ARGS;
+
     char qemu_cmd[8192];
-    snprintf(qemu_cmd, sizeof(qemu_cmd), QEMU_COMMAND_FMT, ram_mb, cpus, net_restrict);
+    snprintf(qemu_cmd, sizeof(qemu_cmd), QEMU_COMMAND_FMT, ram_mb, cpus, snapshot_args, virtfs_args, net_restrict);
 
     /* Redirect stderr to stdout so we can capture chardev pty assignments */
     char cmd_with_redirect[8224];

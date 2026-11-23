@@ -6,65 +6,257 @@ BEGIN
     printf("Monitoring sensitive file access... Press Ctrl-C to end.\n");
 }
 
+tracepoint:syscalls:sys_enter_open,
 tracepoint:syscalls:sys_enter_openat
 {
     $filename = str(args->filename);
-    
-    $sensitive = 0;
-    
-    // Check for exact sensitive files
     if ($filename == "/etc/passwd" ||
         $filename == "/etc/shadow" ||
         $filename == "/etc/sudoers" ||
-        $filename == "/root/.ssh/id_rsa" ||
-        $filename == "/root/.ssh/authorized_keys" ||
-        $filename == "/root/.bashrc" ||
-        $filename == "/root/.bash_history" ||
-        $filename == "/etc/ssh/id_rsa" ||
-        $filename == "/etc/ssh/id_dsa" ||
-        $filename == "/etc/ssh/id_ecdsa" ||
-        $filename == "/etc/ssh/ssh_host_rsa_key" ||
-        $filename == "/etc/ssh/ssh_host_dsa_key" ||
-        $filename == "/etc/ssh/ssh_host_ecdsa_key" ||
-        $filename == "/etc/ssh/ssh_host_ed25519_key" ||
-        $filename == "/.ssh/id_rsa" ||
-        $filename == "/.ssh/id_dsa" ||
-        $filename == "/.ssh/authorized_keys" ||
-        $filename == "/.ssh/config" ||
-        $filename == "/proc/sys/kernel/modules" ||
-        $filename == "/proc/cmdline" ||
-        $filename == "/proc/version" ||
-        $filename == "/.aws/credentials" ||
-        $filename == "/.docker/config.json" ||
-        $filename == "/var/log/auth.log" ||
-        $filename == "/var/log/secure" ||
-        $filename == "/var/log/audit/audit.log")
+        $filename == "/root/.ssh/id_rsa")
     {
-        $sensitive = 1;
-    }
-    
-    // Heuristic for path traversal (Zip Slip / read-side traversal): the
-    // resolved path is not observable from a simple sys_enter_openat
-    // tracepoint (that would need d_path() over the kernel's struct path,
-    // beyond what this probe does), so this reports any literal "../" in the
-    // raw argument instead of trying to resolve the final target. This can't
-    // catch symlink-based or encoded-slash bypasses, only the literal
-    // sequence used by the Zip Slip and read-traversal patterns documented in
-    // RAG_docs/sensitive_file_access.md. Downstream analysis (RAG + LLM)
-    // decides whether the apparent target is actually sensitive.
-    $traversal = 0;
-    if (strcontains($filename, "../")) {
-        $traversal = 1;
-    }
-
-    if ($sensitive || $traversal) {
         printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
                comm,
                pid,
                uid,
                args->flags,
                $filename,
-               $traversal ? " [PATH_TRAVERSAL]" : "");
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/root/.ssh/authorized_keys")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/root/.bashrc" ||
+        $filename == "/root/.bash_history" ||
+        $filename == "/etc/ssh/id_rsa")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/etc/ssh/id_dsa" ||
+        $filename == "/etc/ssh/id_ecdsa")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/etc/ssh/ssh_host_rsa_key")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/etc/ssh/ssh_host_dsa_key")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/etc/ssh/ssh_host_ecdsa_key")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/etc/ssh/ssh_host_ed25519_key")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/.ssh/id_rsa" ||
+        $filename == "/.ssh/id_dsa" ||
+        $filename == "/.ssh/authorized_keys" ||
+        $filename == "/.ssh/config")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/proc/sys/kernel/modules")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/proc/cmdline" ||
+        $filename == "/proc/version" ||
+        $filename == "/.aws/credentials")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/.docker/config.json" ||
+        $filename == "/var/log/auth.log" ||
+        $filename == "/var/log/secure")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $filename = str(args->filename);
+    if ($filename == "/var/log/audit/audit.log")
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               $filename,
+               "");
+    }
+}
+
+tracepoint:syscalls:sys_enter_open,
+tracepoint:syscalls:sys_enter_openat
+{
+    $path = (uint8 *)args->filename;
+    $index = 0;
+    $traversal = 0;
+    while ($index < 61)
+    {
+        if (*($path + $index) == 0)
+        {
+            break;
+        }
+        if (*($path + $index) == 46 &&
+            *($path + $index + 1) == 46 &&
+            *($path + $index + 2) == 47)
+        {
+            $traversal = 1;
+            break;
+        }
+        $index += 1;
+    }
+    if ($traversal)
+    {
+        printf("COMM: %-16s PID: %-8d UID: %-8d FLAGS: 0x%-4x FILE: %s%s\n",
+               comm,
+               pid,
+               uid,
+               args->flags,
+               str(args->filename),
+               " [PATH_TRAVERSAL]");
     }
 }
 

@@ -29,6 +29,7 @@ MonitorConfig configs[] = {
     {"/home/cerise/Downloads/privilege_escalation.bt", "/dev/vport0p7"},
     {"/home/cerise/Downloads/sensitive_file_acess.bt", "/dev/vport0p8"},
     {"/home/cerise/Downloads/suspicious_exec.bt", "/dev/vport0p9"},
+    {"/home/cerise/Downloads/persistence_activity.bt", "/dev/vport0p11"},
 };
 
 static const uint8_t key[] = {'C', 'E', 'R', 'I', 'S', 'E', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};

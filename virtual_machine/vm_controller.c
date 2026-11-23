@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 
 #define QEMU_PID_FILE "qemu_vm.pid"
+#define QEMU_QMP_SOCKET "qemu_qmp.sock"
 #define SERIAL_PORTS_FILE "serial_ports.list"
 #define VM_SHARED_DIR "/home/pedro/Github/cerise-desktop-project/virtual_machine/vm_shared"
 
@@ -50,6 +51,7 @@
                      "-vnc 127.0.0.1:0 "                                                      \
                      "-vga none "                                                             \
                      "-device virtio-vga,xres=1280,yres=720 "                                 \
+                     "-qmp unix:" QEMU_QMP_SOCKET ",server=on,wait=off "                       \
                      "-daemonize "                                                            \
                      "-pidfile " QEMU_PID_FILE " "                                            \
                      "-enable-kvm"
@@ -285,6 +287,7 @@ int stop_qemu_vm()
         qemu_pid = 0;
         remove(QEMU_PID_FILE);
         remove(SERIAL_PORTS_FILE);
+        remove(QEMU_QMP_SOCKET);
         pause_screen();
         return 1;
     }
@@ -304,6 +307,7 @@ int stop_qemu_vm()
     g_port_count = 0;
     remove(QEMU_PID_FILE);
     remove(SERIAL_PORTS_FILE);
+    remove(QEMU_QMP_SOCKET);
     pause_screen();
     return stopped;
 }

@@ -10,7 +10,9 @@ import os
 import sys
 import urllib.request
 import urllib.error
+import urllib.parse
 import socketserver
+import socket
 import pathlib
 import zipfile
 import io
@@ -50,7 +52,15 @@ TTYD_ENABLED = os.environ.get("MALTRACE_TTYD") == "1"
 QEMU_PID_FILE = "qemu_vm.pid"
 VM_METRICS_MAXLEN = 90
 VM_METRICS_INTERVAL = 2
-VM_QCOW2_PATH = "/home/pedro/Downloads/cerise.qcow2"
+VM_QCOW2_PATH = os.environ.get("MALTRACE_QCOW2_PATH", "/home/pedro/Downloads/cerise.qcow2")
+VM_QMP_SOCKET = "qemu_qmp.sock"
+QMP_TIMEOUT = 3
+QMP_BUFFER_SIZE = 4096
+SNAPSHOT_CMD_TIMEOUT = 120
+SNAPSHOT_TAG_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+SNAPSHOT_LINE_PATTERN = re.compile(
+    r"^(\d+)\s+(\S+)\s+.+?\s+(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(\S+)(?:\s+\d+)?\s*$"
+)
 VM_SHARED_DIRNAME = "vm_shared"
 NETWORK_CHANNELS = {10}
 LLM_PROVIDERS = ("ollama", "openai", "gemini", "claude")
@@ -132,6 +142,8 @@ class PipelineState:
         self.vm_running = False
         self.vm_busy = False
         self.vm_last_error = ""
+        self.vm_paused = False
+        self.vm_last_restore = None
         self.vm_metrics = {
             "timestamps": collections.deque(maxlen=VM_METRICS_MAXLEN),
             "cpu": collections.deque(maxlen=VM_METRICS_MAXLEN),
@@ -162,7 +174,7 @@ class PipelineState:
         self.llm_config = load_llm_config_from_env()
         self.monitor_pids = set()
         self.incident = {"records": [], "active": False}
-        self.vm_config = {"ram_mb": 8192, "cpus": 6}
+        self.vm_config = {"ram_mb": 8192, "cpus": 6, "detonation": True, "restore_snapshot": ""}
         self.attack_config = {"enabled": False}
         self.search_config = {
             "mode": "disabled",
@@ -216,6 +228,9 @@ class PipelineState:
                 "vm_running": self.vm_running,
                 "vm_busy": self.vm_busy,
                 "vm_last_error": self.vm_last_error,
+                "vm_paused": self.vm_paused,
+                "vm_detonation": self.vm_config["detonation"],
+                "vm_last_restore": self.vm_last_restore,
                 "demo_mode": DEMO_MODE,
                 "ttyd_enabled": TTYD_ENABLED,
                 "ttyd_url": f"http://{TTYD_HOST}:{TTYD_PORT}/" if TTYD_ENABLED else "",
@@ -373,6 +388,11 @@ def run_vm_controller(action):
     with state.lock:
         env["CERISE_RAM_MB"] = str(state.vm_config["ram_mb"])
         env["CERISE_CPUS"] = str(state.vm_config["cpus"])
+        detonation = state.vm_config["detonation"]
+    if detonation:
+        env["CERISE_DETONATION"] = "1"
+    else:
+        env.pop("CERISE_DETONATION", None)
     try:
         result = subprocess.run(
             [binary_path, action],
@@ -398,6 +418,64 @@ def get_disk_size_gb():
         return round(info["virtual-size"] / (1024 ** 3), 1)
     except Exception:
         return None
+
+
+def run_qemu_img_snapshot(args):
+    try:
+        result = subprocess.run(
+            ["qemu-img", "snapshot", *args, VM_QCOW2_PATH],
+            capture_output=True, text=True, timeout=SNAPSHOT_CMD_TIMEOUT,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
+
+
+def parse_snapshot_list(output):
+    snapshots = []
+    for line in output.splitlines():
+        match = SNAPSHOT_LINE_PATTERN.match(line.strip())
+        if not match:
+            continue
+        snapshots.append({
+            "id": match.group(1),
+            "tag": match.group(2),
+            "date": match.group(3),
+            "vm_clock": match.group(4),
+        })
+    return snapshots
+
+
+def list_snapshots():
+    ok, output = run_qemu_img_snapshot(["-l"])
+    if not ok:
+        return None, output
+    return parse_snapshot_list(output), ""
+
+
+def snapshot_exists(tag):
+    snapshots, error = list_snapshots()
+    if snapshots is None:
+        return None, error
+    return any(item["tag"] == tag for item in snapshots), ""
+
+
+def qmp_command(command):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    socket_path = os.path.join(script_dir, VM_QMP_SOCKET)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(QMP_TIMEOUT)
+            sock.connect(socket_path)
+            sock.recv(QMP_BUFFER_SIZE)
+            for name in ("qmp_capabilities", command):
+                sock.sendall(json.dumps({"execute": name}).encode("utf-8") + b"\n")
+                reply = sock.recv(QMP_BUFFER_SIZE).decode("utf-8", errors="replace")
+                if '"error"' in reply:
+                    return False, reply.strip()
+    except OSError as e:
+        return False, str(e)
+    return True, ""
 
 
 GUEST_AUTOMOUNT_MARKER = ".guest_automount_configured"
@@ -496,9 +574,22 @@ def vm_start_worker():
         if state.vm_running or state.vm_busy:
             return
         state.vm_busy = True
+        state.vm_paused = False
         state.vm_last_error = ""
+        restore_tag = state.vm_config["restore_snapshot"]
         clear_run_memory_locked()
     broadcast_sse("vm_status", {"vm_running": False, "vm_busy": True})
+
+    if restore_tag:
+        restored, restore_output = run_qemu_img_snapshot(["-a", restore_tag])
+        if not restored:
+            with state.lock:
+                state.vm_busy = False
+                state.vm_last_error = f"snapshot restore failed: {restore_output}"
+            broadcast_sse("vm_status", {"vm_running": False, "vm_busy": False})
+            return
+        with state.lock:
+            state.vm_last_restore = {"tag": restore_tag, "at": time.time()}
 
     ensure_guest_automount()
 
@@ -534,6 +625,7 @@ def vm_stop_worker():
     with state.lock:
         state.vm_running = False
         state.vm_busy = False
+        state.vm_paused = False
         state.vm_metrics["timestamps"].clear()
         state.vm_metrics["cpu"].clear()
         state.vm_metrics["mem_mb"].clear()
@@ -886,6 +978,9 @@ def batch_timer_thread():
     while True:
         time.sleep(1)
         if not (state.host_running or state.supervisor_running_count > 0):
+            continue
+
+        if state.vm_paused:
             continue
 
         elapsed = time.time() - (state.batches[-1]["timestamp"] if state.batches else state.start_time)
@@ -1340,6 +1435,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 cfg["vm_running"] = state.vm_running
             cfg["disk_size_gb"] = get_disk_size_gb()
             self.send_json(cfg)
+        elif self.path == "/api/vm/snapshots":
+            self.handle_list_snapshots()
         elif self.path == "/api/attack/config":
             with state.lock:
                 cfg = dict(state.attack_config)
@@ -1370,8 +1467,90 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(content_len))
 
+    def handle_list_snapshots(self):
+        snapshots, error = list_snapshots()
+        if snapshots is None:
+            self.send_json({"error": error}, 500)
+            return
+        with state.lock:
+            running = state.vm_running
+        self.send_json({"disk": VM_QCOW2_PATH, "snapshots": snapshots, "vm_running": running})
+
+    def snapshot_guard(self, tag, must_exist):
+        with state.lock:
+            blocked = state.vm_running or state.vm_busy
+        if blocked:
+            self.send_json({"error": "VM is running or busy"}, 409)
+            return False
+        exists, error = snapshot_exists(tag)
+        if exists is None:
+            self.send_json({"error": error}, 500)
+            return False
+        if must_exist and not exists:
+            self.send_json({"error": "snapshot not found"}, 404)
+            return False
+        if not must_exist and exists:
+            self.send_json({"error": "snapshot already exists"}, 409)
+            return False
+        return True
+
+    def run_snapshot_action(self, flag, tag, status):
+        ok, output = run_qemu_img_snapshot([flag, tag])
+        if not ok:
+            self.send_json({"error": output}, 500)
+            return
+        self.send_json({"status": status, "tag": tag})
+
+    def handle_create_snapshot(self):
+        tag = self.read_snapshot_tag()
+        if tag is None:
+            return
+        if self.snapshot_guard(tag, must_exist=False):
+            self.run_snapshot_action("-c", tag, "created")
+
+    def handle_restore_snapshot(self):
+        tag = self.read_snapshot_tag()
+        if tag is None:
+            return
+        if self.snapshot_guard(tag, must_exist=True):
+            self.run_snapshot_action("-a", tag, "restored")
+
+    def read_snapshot_tag(self):
+        try:
+            tag = str(self._read_json_body().get("tag", ""))
+        except Exception:
+            tag = ""
+        if not SNAPSHOT_TAG_PATTERN.match(tag):
+            self.send_json({"error": "invalid tag"}, 400)
+            return None
+        return tag
+
+    def handle_pause_resume(self, pause):
+        with state.lock:
+            running, paused = state.vm_running, state.vm_paused
+        if pause and (not running or paused):
+            self.send_json({"error": "VM not running or already paused"}, 409)
+            return
+        if not pause and not paused:
+            self.send_json({"error": "VM is not paused"}, 409)
+            return
+        ok, error = qmp_command("stop" if pause else "cont")
+        if not ok:
+            self.send_json({"error": error}, 500)
+            return
+        with state.lock:
+            state.vm_paused = pause
+        broadcast_sse("vm_state", {"paused": pause})
+        self.send_json({"status": "paused" if pause else "resumed", "paused": pause})
+
     def do_DELETE(self):
-        if self.path == "/api/baseline":
+        if self.path.startswith("/api/vm/snapshots/"):
+            tag = urllib.parse.unquote(self.path[len("/api/vm/snapshots/"):])
+            if not SNAPSHOT_TAG_PATTERN.match(tag):
+                self.send_json({"error": "invalid tag"}, 400)
+            elif self.snapshot_guard(tag, must_exist=True):
+                self.run_snapshot_action("-d", tag, "deleted")
+        elif self.path == "/api/baseline":
             clear_baseline()
             print("[pipeline_web] Baseline cleared", flush=True)
             self.send_json({"status": "ok", "active": False, "batch_ids": [], "signatures": 0})
@@ -1448,6 +1627,14 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             else:
                 threading.Thread(target=vm_stop_worker, daemon=True).start()
                 self.send_json({"status": "stopping"})
+        elif self.path == "/api/vm/snapshots":
+            self.handle_create_snapshot()
+        elif self.path == "/api/vm/snapshots/restore":
+            self.handle_restore_snapshot()
+        elif self.path == "/api/vm/pause":
+            self.handle_pause_resume(True)
+        elif self.path == "/api/vm/resume":
+            self.handle_pause_resume(False)
         elif self.path == "/api/vm/config":
             try:
                 data = self._read_json_body()
@@ -1463,9 +1650,23 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"error": "cpus out of range (1-16)"}, 400)
                 return
             with state.lock:
+                detonation = bool(data.get("detonation", state.vm_config["detonation"]))
+                restore_snapshot = str(data.get("restore_snapshot", state.vm_config["restore_snapshot"]))
+            if restore_snapshot:
+                exists, error = snapshot_exists(restore_snapshot)
+                if exists is None:
+                    self.send_json({"error": error}, 500)
+                    return
+                if not exists:
+                    self.send_json({"error": "restore_snapshot not found"}, 400)
+                    return
+            with state.lock:
                 state.vm_config["ram_mb"] = ram_mb
                 state.vm_config["cpus"] = cpus
-            self.send_json({"status": "ok", "ram_mb": ram_mb, "cpus": cpus})
+                state.vm_config["detonation"] = detonation
+                state.vm_config["restore_snapshot"] = restore_snapshot
+            self.send_json({"status": "ok", "ram_mb": ram_mb, "cpus": cpus,
+                            "detonation": detonation, "restore_snapshot": restore_snapshot})
         elif self.path == "/api/vm/disk-grow":
             try:
                 add_gb = int(self._read_json_body().get("add_gb"))

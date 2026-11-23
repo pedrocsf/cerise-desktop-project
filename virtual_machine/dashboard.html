@@ -752,13 +752,17 @@
                 <span id="vm-lifecycle-status" style="font-size:12px;color:var(--muted)">stopped</span>
                 <button id="vm-start-btn" onclick="vmAction('start')" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:7px 18px;color:#fff;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(225,29,72,0.35)">Start VM</button>
                 <button id="vm-stop-btn" onclick="vmAction('stop')" disabled style="background:none;border:1px solid var(--red);color:var(--red);padding:7px 18px;border-radius:var(--pill);font-size:12px;font-weight:600;cursor:pointer">Stop VM</button>
+                <button id="vm-pause-btn" onclick="vmTogglePause()" disabled style="background:none;border:1px solid var(--border);color:var(--text);padding:7px 18px;border-radius:var(--pill);font-size:12px;font-weight:600;cursor:pointer">Pause</button>
                 <button id="vm-fullscreen-btn" onclick="toggleVmFullscreen()" title="Fullscreen" style="background:none;border:1px solid var(--border);color:var(--text);width:32px;height:32px;border-radius:var(--pill);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
                 </button>
               </div>
             </div>
             <div id="vm-error-box" style="display:none;background:rgba(239,68,68,0.1);border:1px solid var(--red);color:var(--red);border-radius:12px;padding:8px 12px;font-size:12px;font-family:var(--font-mono);white-space:pre-wrap;margin-bottom:12px"></div>
-            <div id="vnc-screen" style="width:100%;max-width:800px;aspect-ratio:16/9;margin:0 auto;background:#000;border:1px solid var(--border);border-radius:12px;overflow:hidden"></div>
+            <div id="vnc-wrap" style="position:relative;width:100%;max-width:800px;margin:0 auto">
+              <div id="vnc-screen" style="width:100%;aspect-ratio:16/9;background:#000;border:1px solid var(--border);border-radius:12px;overflow:hidden"></div>
+              <div id="vm-paused-badge" style="display:none;position:absolute;top:12px;right:12px;pointer-events:none;background:rgba(0,0,0,0.55);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid var(--border);color:#fff;border-radius:var(--pill);padding:4px 12px;font-size:11px;font-weight:700;letter-spacing:0.12em">PAUSED</div>
+            </div>
           </div>
           <div class="card">
             <h3>Send File to VM</h3>
@@ -803,8 +807,36 @@
                 </div>
               </div>
             </div>
+            <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
+                <input id="vm-cfg-detonation" type="checkbox" style="accent-color:var(--accent)">
+                Detonation mode (discard disk writes)
+              </label>
+              <div>
+                <label for="vm-cfg-restore" style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Restore before each start</label>
+                <select id="vm-cfg-restore" style="background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none;max-width:100%">
+                  <option value="">(none)</option>
+                </select>
+              </div>
+            </div>
+            <div id="vm-last-restore" style="font-size:11px;color:var(--muted);margin-bottom:10px"></div>
             <button onclick="saveVmConfig()" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px 18px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Apply on Next Start</button>
             <div id="vm-cfg-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+          </div>
+          <div class="card" id="vm-snapshots-card">
+            <h3>VM Snapshots</h3>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+              <input id="vm-snap-tag" type="text" maxlength="64" placeholder="snapshot-tag" style="flex:1;min-width:140px;background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:10px;font-size:12px;outline:none">
+              <button id="vm-snap-create-btn" onclick="createVmSnapshot()" style="background:linear-gradient(135deg,var(--accent),var(--accent-sec));border:none;border-radius:var(--pill);padding:8px 18px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">Create snapshot</button>
+            </div>
+            <div id="vm-snap-hint" style="font-size:11px;color:var(--muted);margin-bottom:10px"></div>
+            <div id="vm-snap-error" style="display:none;font-size:12px;color:var(--red);margin-bottom:10px;word-break:break-word"></div>
+            <div style="overflow-x:auto">
+              <table style="width:100%;border-collapse:collapse;font-size:12px">
+                <thead><tr style="text-align:left;color:var(--muted)"><th style="padding:6px 8px;font-weight:500">Tag</th><th style="padding:6px 8px;font-weight:500">Date</th><th style="padding:6px 8px;font-weight:500;text-align:right">Actions</th></tr></thead>
+                <tbody id="vm-snap-body"></tbody>
+              </table>
+            </div>
           </div>
           <div class="dash-grid" id="vm-metrics-grid" style="display:none">
             <div class="card">
@@ -964,19 +996,24 @@
         document.getElementById('vm-cfg-ram').value = cfg.ram_mb;
         document.getElementById('vm-cfg-cpus').value = cfg.cpus;
         document.getElementById('vm-cfg-disk-size').textContent = cfg.disk_size_gb ?? '–';
+        document.getElementById('vm-cfg-detonation').checked = !!cfg.detonation;
+        vmRestoreSelection = cfg.restore_snapshot || '';
+        renderVmRestoreSelect();
+        renderVmSnapshots();
       }).catch(() => {});
     }
     loadVmConfig();
+    loadVmSnapshots();
 
     function saveVmConfig() {
       const statusEl = document.getElementById('vm-cfg-status');
       const ram_mb = parseInt(document.getElementById('vm-cfg-ram').value, 10);
       const cpus = parseInt(document.getElementById('vm-cfg-cpus').value, 10);
       statusEl.style.color = 'var(--muted)'; statusEl.textContent = 'Saving...';
-      fetch('/api/vm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ram_mb, cpus }) })
+      fetch('/api/vm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ram_mb, cpus, detonation: document.getElementById('vm-cfg-detonation').checked, restore_snapshot: document.getElementById('vm-cfg-restore').value }) })
         .then(r => r.json()).then(d => {
           if (d.error) { statusEl.style.color = 'var(--red)'; statusEl.textContent = d.error }
-          else { statusEl.style.color = 'var(--green)'; statusEl.textContent = 'Saved. Takes effect on the next Start VM.' }
+          else { statusEl.style.color = 'var(--green)'; statusEl.textContent = 'Saved. Takes effect on the next Start VM.'; vmRestoreSelection = document.getElementById('vm-cfg-restore').value; renderVmSnapshots() }
         }).catch(() => { statusEl.style.color = 'var(--red)'; statusEl.textContent = 'Failed to save.' });
     }
 
@@ -1056,6 +1093,125 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
     }
 
     let prevVmRunning = false;
+    let vmSnapshots = [];
+    let vmRestoreSelection = '';
+    let vmIsRunning = false;
+    let vmIsPaused = false;
+    let vmSnapConfirm = null;
+    let vmSnapConfirmTimer = null;
+    const VM_SNAP_TAG_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+    function escapeSnapHtml(v) {
+      return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function showVmSnapError(msg) {
+      const el = document.getElementById('vm-snap-error');
+      if (!msg) { el.style.display = 'none'; el.textContent = ''; return }
+      el.style.display = 'block'; el.textContent = msg;
+    }
+
+    function renderVmRestoreSelect() {
+      const sel = document.getElementById('vm-cfg-restore');
+      const tags = vmSnapshots.map(x => x.tag);
+      let html = '<option value="">(none)</option>' + tags.map(t => `<option value="${escapeSnapHtml(t)}">${escapeSnapHtml(t)}</option>`).join('');
+      if (vmRestoreSelection && !tags.includes(vmRestoreSelection)) html += `<option value="${escapeSnapHtml(vmRestoreSelection)}">${escapeSnapHtml(vmRestoreSelection)} (missing)</option>`;
+      sel.innerHTML = html;
+      sel.value = vmRestoreSelection;
+    }
+
+    function renderVmSnapshots() {
+      const body = document.getElementById('vm-snap-body');
+      const locked = vmIsRunning;
+      const dis = locked ? 'disabled' : '';
+      const dimStyle = locked ? 'opacity:0.4;cursor:not-allowed;' : 'cursor:pointer;';
+      if (!vmSnapshots.length) {
+        body.innerHTML = '<tr><td colspan="3" style="padding:10px 8px;color:var(--muted)">No snapshots</td></tr>';
+      } else {
+        body.innerHTML = vmSnapshots.map(x => {
+          const t = escapeSnapHtml(x.tag);
+          const selected = x.tag === vmRestoreSelection ? '<span style="margin-left:8px;font-size:10px;color:var(--accent);border:1px solid var(--accent);border-radius:var(--pill);padding:1px 8px">auto-restore</span>' : '';
+          const cr = vmSnapConfirm && vmSnapConfirm.tag === x.tag && vmSnapConfirm.action === 'restore';
+          const cd = vmSnapConfirm && vmSnapConfirm.tag === x.tag && vmSnapConfirm.action === 'delete';
+          const restoreStyle = cr ? 'border:1px solid var(--accent);color:var(--accent)' : 'border:1px solid var(--border);color:var(--text)';
+          const deleteStyle = 'border:1px solid var(--red);color:var(--red)';
+          return `<tr style="border-top:1px solid var(--border)"><td style="padding:8px;font-family:var(--font-mono);word-break:break-all">${t}${selected}</td><td style="padding:8px;color:var(--muted);white-space:nowrap">${escapeSnapHtml(x.date || '')}</td><td style="padding:8px;text-align:right;white-space:nowrap"><button ${dis} onclick="vmSnapAction('restore', this.dataset.tag)" data-tag="${t}" style="background:none;${restoreStyle};padding:4px 12px;border-radius:var(--pill);font-size:11px;margin-right:6px;${dimStyle}">${cr ? 'Confirm restore?' : 'Restore'}</button><button ${dis} onclick="vmSnapAction('delete', this.dataset.tag)" data-tag="${t}" style="background:none;${deleteStyle};padding:4px 12px;border-radius:var(--pill);font-size:11px;${dimStyle}">${cd ? 'Confirm delete?' : 'Delete'}</button></td></tr>`;
+        }).join('');
+      }
+      document.getElementById('vm-snap-create-btn').disabled = locked;
+      document.getElementById('vm-snap-create-btn').style.opacity = locked ? '0.4' : '1';
+      document.getElementById('vm-snap-create-btn').style.cursor = locked ? 'not-allowed' : 'pointer';
+      document.getElementById('vm-snap-tag').disabled = locked;
+      document.getElementById('vm-snap-hint').textContent = locked ? 'Stop the VM to manage snapshots' : 'Tag: letters, digits, dot, underscore, dash (max 64)';
+    }
+
+    function loadVmSnapshots() {
+      fetch('/api/vm/snapshots').then(r => r.json()).then(d => {
+        vmSnapshots = Array.isArray(d.snapshots) ? d.snapshots : [];
+        if (typeof d.vm_running === 'boolean') vmIsRunning = d.vm_running;
+        renderVmRestoreSelect();
+        renderVmSnapshots();
+      }).catch(() => {});
+    }
+
+    function clearVmSnapConfirm() {
+      clearTimeout(vmSnapConfirmTimer);
+      vmSnapConfirm = null;
+    }
+
+    function vmSnapApi(method, url, body) {
+      const opts = { method };
+      if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body) }
+      return fetch(url, opts).then(r => r.json().catch(() => ({})).then(d => {
+        if (!r.ok || d.error) throw new Error(d.error || `Request failed (${r.status})`);
+        return d;
+      }));
+    }
+
+    function vmSnapAction(action, tag) {
+      if (vmIsRunning) return;
+      showVmSnapError('');
+      if (!vmSnapConfirm || vmSnapConfirm.tag !== tag || vmSnapConfirm.action !== action) {
+        clearVmSnapConfirm();
+        vmSnapConfirm = { tag, action };
+        vmSnapConfirmTimer = setTimeout(() => { vmSnapConfirm = null; renderVmSnapshots() }, 5000);
+        renderVmSnapshots();
+        return;
+      }
+      clearVmSnapConfirm();
+      renderVmSnapshots();
+      const req = action === 'restore'
+        ? vmSnapApi('POST', '/api/vm/snapshots/restore', { tag })
+        : vmSnapApi('DELETE', `/api/vm/snapshots/${encodeURIComponent(tag)}`);
+      req.catch(e => showVmSnapError(e.message || 'Request failed')).then(() => { loadVmSnapshots(); loadVmConfig() });
+    }
+
+    function createVmSnapshot() {
+      if (vmIsRunning) return;
+      const input = document.getElementById('vm-snap-tag');
+      const tag = input.value.trim();
+      if (!VM_SNAP_TAG_RE.test(tag)) { showVmSnapError('Invalid tag. Use 1-64 characters: letters, digits, dot, underscore or dash.'); return }
+      showVmSnapError('');
+      vmSnapApi('POST', '/api/vm/snapshots', { tag })
+        .then(() => { input.value = '' })
+        .catch(e => showVmSnapError(e.message || 'Request failed'))
+        .then(loadVmSnapshots);
+    }
+
+    function vmTogglePause() {
+      const btn = document.getElementById('vm-pause-btn');
+      btn.disabled = true;
+      vmSnapApi('POST', vmIsPaused ? '/api/vm/resume' : '/api/vm/pause')
+        .catch(e => { const box = document.getElementById('vm-error-box'); box.style.display = 'block'; box.textContent = e.message })
+        .then(pollStatus);
+    }
+
+    function applyVmPaused(paused) {
+      vmIsPaused = !!paused;
+      document.getElementById('vm-paused-badge').style.display = vmIsPaused ? 'block' : 'none';
+      document.getElementById('vm-pause-btn').textContent = vmIsPaused ? 'Resume' : 'Pause';
+    }
+
     function vmAction(action) {
       document.getElementById('vm-start-btn').disabled = true;
       document.getElementById('vm-stop-btn').disabled = true;
@@ -1154,7 +1310,19 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       document.getElementById('vm-metrics-grid').style.display = s.demo_mode ? 'none' : '';
       document.getElementById('vm-start-btn').disabled = s.vm_running || s.vm_busy;
       document.getElementById('vm-stop-btn').disabled = !s.vm_running || s.vm_busy;
-      document.getElementById('vm-lifecycle-status').textContent = s.vm_busy ? 'working...' : (s.vm_running ? 'running' : 'stopped');
+      document.getElementById('vm-lifecycle-status').textContent = s.vm_busy ? 'working...' : (s.vm_running ? (s.vm_paused ? 'paused' : 'running') : 'stopped');
+      applyVmPaused(s.vm_running && s.vm_paused);
+      document.getElementById('vm-pause-btn').disabled = !s.vm_running || s.vm_busy;
+      if (s.vm_running !== vmIsRunning) { vmIsRunning = !!s.vm_running; clearVmSnapConfirm(); renderVmSnapshots(); loadVmSnapshots() }
+      const lastRestore = document.getElementById('vm-last-restore');
+      if (s.vm_last_restore && s.vm_last_restore.tag) {
+        const at = s.vm_last_restore.at || s.vm_last_restore.time || s.vm_last_restore.timestamp;
+        const when = at ? (typeof at === 'number' ? new Date(at * 1000).toLocaleString() : String(at)) : '';
+        lastRestore.textContent = `Last restore: ${s.vm_last_restore.tag}${when ? ' at ' + when : ''}`;
+      } else if (typeof s.vm_last_restore === 'string' && s.vm_last_restore) {
+        lastRestore.textContent = `Last restore: ${s.vm_last_restore}`;
+      } else { lastRestore.textContent = '' }
+      if (s.vm_running && s.vm_paused) document.getElementById('ollama-status').textContent = 'Analysis paused: batches are held until resume';
       const vmErrBox = document.getElementById('vm-error-box');
       if (s.vm_last_error) { vmErrBox.style.display = 'block'; vmErrBox.textContent = s.vm_last_error } else { vmErrBox.style.display = 'none' }
       if (s.vm_running && !prevVmRunning) connectVncScreen();
@@ -1250,6 +1418,11 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       const d = JSON.parse(e.data);
       eventTimeline.push(d.timestamp); if (eventTimeline.length > 1000) eventTimeline.shift();
       if (d.source === 'ebpf') ebpfCount++; else if (d.source === 'network') networkCount++;
+    });
+    evtSource.addEventListener('vm_state', e => {
+      const d = JSON.parse(e.data);
+      applyVmPaused(d.paused);
+      pollStatus();
     });
     evtSource.addEventListener('batch_created', e => { batches.push(JSON.parse(e.data)); renderBatchList() });
     evtSource.addEventListener('batch_requeued', e => {

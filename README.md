@@ -42,36 +42,19 @@ Maltrace runs a suspicious sample inside a disposable QEMU virtual machine while
 - **MITRE ATT&CK mapping (optional).** Technique IDs are validated against an offline ATT&CK Enterprise base.
 - **External Logs.** Paste or load logs of a second sample and analyze them in parallel, fully isolated from the live pipeline.
 - **Web dashboard.** Live batches, charts, an embedded noVNC view of the VM, a host terminal, an analyst chat, file transfer into the VM and quick VM settings.
-- **Demo mode.** A presentation mode with a prepared attack chain and no malware required.
+- **Demo mode.** A presentation mode with a prepared attack chain and no malware required, kept on the `demo` branch.
 
 ## Quick start
 
-The fastest way to see Maltrace is the demo mode, which seeds a coherent TeamTNT-style cryptojacking chain and needs no sample and no live telemetry:
+To see Maltrace without a sample or live telemetry, check out the `demo` branch and follow its README.
 
-```sh
-cd virtual_machine
-MALTRACE_DEMO=1 ../venv/bin/python3 pipeline_web.py
-```
-
-Then open `http://localhost:8080`.
-
-In demo mode the VM screen, Start/Stop VM and the settings panels are real, while the batches, charts and chat are prepared data. Before re-analyzing batches, pick an installed model in **⚙ Configure**, because the default Ollama model may not exist on your machine.
-
-Stop it, including the `websockify` and `ttyd` children:
-
-```sh
-pkill -f "[p]ipeline_web.py"; pkill -f "[w]ebsockify"; pkill -f "[t]tyd.*7682"
-```
-
-### Real mode
-
-Real mode needs more pieces on the host and in the guest:
+Running it for real needs more pieces on the host and in the guest:
 
 - **Host:** Linux, QEMU, a Python environment with `chromadb`, `sentence-transformers`, `rank-bm25` and `tqdm`, `websockify`, a clone of [noVNC](https://github.com/novnc/noVNC) at `virtual_machine/novnc`, and optionally `ttyd` and `libguestfs-tools` (used to auto-mount the shared folder in the guest).
 - **Guest:** a Linux VM disk image referenced by `virtual_machine/vm_controller.c`, with `bpftrace`, the nine `.bt` scripts from `modules/07_security/`, `scapy` and `psutil`, and the `guest_monitor` and `supervisor_monitor` agents compiled inside the guest.
 - **Knowledge base:** build the vector store from the fact sheets with `python indexer.py`.
 
-Then start the dashboard without `MALTRACE_DEMO` and use **Start VM** in the VM Screen tab. The path to the disk image is specific to each machine, so adjust it in `vm_controller.c`.
+Then start the dashboard with `cd virtual_machine && ../venv/bin/python3 pipeline_web.py` and use **Start VM** in the VM Screen tab. The path to the disk image is specific to each machine, so adjust it in `vm_controller.c`.
 
 ## Usage
 

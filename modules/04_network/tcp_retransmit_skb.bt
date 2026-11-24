@@ -1,4 +1,0 @@
-tracepoint:tcp:tcp_retransmit_skb
-{
-  printf("TCP RETRANSMIT pid=%d comm=%s\n", pid, comm);
-}

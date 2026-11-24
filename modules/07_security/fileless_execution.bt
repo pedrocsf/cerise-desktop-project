@@ -1,4 +1,0 @@
-tracepoint:syscalls:sys_enter_memfd_create
-{
-    printf("{\"e\":\"fm\",\"c\":\"%s\",\"p\":%d,\"u\":%d,\"n\":\"%s\"}\n", comm, pid, uid, str(args->uname));
-}

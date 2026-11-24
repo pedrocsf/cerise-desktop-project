@@ -1,4 +1,0 @@
-tracepoint:tcp:tcp_destroy_sock
-{
-  printf("TCP CLOSE pid=%d comm=%s\n", pid, comm);
-}

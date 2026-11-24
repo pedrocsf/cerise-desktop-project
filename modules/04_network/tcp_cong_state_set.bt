@@ -1,5 +1,0 @@
-tracepoint:tcp:tcp_cong_state_set
-{
-  printf("TCP CONG STATE pid=%d comm=%s\n", pid, comm);
-}
-

@@ -1,4 +1,0 @@
-tracepoint:tcp:tcp_bad_csum
-{
-  printf("TCP BAD CHECKSUM pid=%d comm=%s\n", pid, comm);
-}

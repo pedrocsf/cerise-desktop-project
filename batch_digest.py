@@ -23,6 +23,7 @@ SENSOR_DOCKER_SOCKET = "docker_socket"
 SENSOR_NETWORK = "network"
 SENSOR_BANNER = "banner"
 SENSOR_BPFTRACE_RUNTIME = "bpftrace_runtime"
+SENSOR_HEARTBEAT = "heartbeat"
 SENSOR_UNKNOWN = "unknown"
 
 KIND_UNPARSED = "unparsed"
@@ -38,6 +39,7 @@ KIND_MEMFD_CREATE = "memfd_create"
 KIND_LOG_WRITE = "log_write"
 KIND_PERSISTENCE = "persistence"
 KIND_MASS_FILE_OPS = "mass_file_ops"
+KIND_HEARTBEAT = "heartbeat"
 KIND_DOCKER_SOCKET_CONNECT = "docker_socket_connect"
 KIND_FLOW = "flow"
 KIND_DNS_QUERY = "dns_query"
@@ -113,6 +115,15 @@ TCP_PROTOCOL = "TCP"
 EPHEMERAL_PORT_START = 32768
 EPHEMERAL_PORT_LABEL = "*"
 OUTBOUND_DIRECTION = "outbound"
+
+HEARTBEAT_EVENT_NAME = "hb"
+SENSOR_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
+MAX_TRACKED_SENSORS = 32
+SENSOR_HEALTH_NOTE = (
+    "A sensor that stops reporting, dies or restarts may have been killed or tampered with by the malware. "
+    "Treat it as possible defense evasion and say so in the analysis, together with the sensor names, but do not "
+    "conclude malicious intent from a restart alone."
+)
 
 DIGEST_MAX_CHARS = 12000
 GROUPS_SECTION_SHARE = 0.75
@@ -212,6 +223,17 @@ class ParsedEvent:
     dst_ip: str = ""
     dst_port: Optional[int] = None
     detail: str = ""
+    sequence: Optional[int] = None
+    alive: Optional[bool] = None
+
+
+@dataclass
+class SensorHealth:
+    heartbeats: int = 0
+    last_sequence: Optional[int] = None
+    gaps: int = 0
+    restarts: int = 0
+    dead: bool = False
 
 
 @dataclass
@@ -374,7 +396,22 @@ def _parse_mass_file_ops_json(raw: str, payload: dict) -> ParsedEvent:
     )
 
 
+def _parse_heartbeat_json(raw: str, payload: dict) -> Optional[ParsedEvent]:
+    name = payload.get("s")
+    sequence = _to_int(payload.get("q"))
+    alive = _to_int(payload.get("a"))
+    if not isinstance(name, str) or SENSOR_NAME_PATTERN.match(name) is None:
+        return None
+    if sequence is None or sequence < 0 or alive not in (0, 1):
+        return None
+    return ParsedEvent(
+        source=SOURCE_EBPF, sensor=SENSOR_HEARTBEAT, kind=KIND_HEARTBEAT, target=name, raw=raw,
+        sequence=sequence, alive=bool(alive),
+    )
+
+
 EBPF_CUSTOM_PARSERS = {
+    HEARTBEAT_EVENT_NAME: _parse_heartbeat_json,
     "persistence": _parse_persistence_json,
     "mass_file_ops": _parse_mass_file_ops_json,
 }
@@ -574,7 +611,7 @@ def _is_supervisor_ebpf_event(event: ParsedEvent, supervisor_pids: frozenset) ->
 
 
 def is_control_noise(event: ParsedEvent, supervisor_pids: frozenset = frozenset()) -> bool:
-    if event.kind == KIND_BANNER:
+    if event.kind in (KIND_BANNER, KIND_HEARTBEAT):
         return True
     if _is_monitoring_comm(event.comm):
         return True
@@ -616,7 +653,7 @@ def event_signature(event: ParsedEvent) -> str:
 
 
 def _is_signature_candidate(event: ParsedEvent) -> bool:
-    return event.kind not in (KIND_UNPARSED, KIND_LOST_EVENTS, KIND_BANNER)
+    return event.kind not in (KIND_UNPARSED, KIND_LOST_EVENTS, KIND_BANNER, KIND_HEARTBEAT)
 
 
 class BaselineProfile:
@@ -1018,6 +1055,74 @@ def _assemble_text(
     return "\n".join(sections)
 
 
+def _register_heartbeat(health: Dict[str, SensorHealth], event: ParsedEvent) -> None:
+    record = health.get(event.target)
+    if record is None:
+        if len(health) >= MAX_TRACKED_SENSORS:
+            return
+        record = health[event.target] = SensorHealth()
+    record.heartbeats += 1
+    record.dead = not event.alive
+    previous = record.last_sequence
+    record.last_sequence = event.sequence
+    if previous is None:
+        return
+    if event.sequence <= previous:
+        record.restarts += 1
+        return
+    record.gaps += event.sequence - previous - 1
+
+
+def collect_sensor_health(events: Iterable[ParsedEvent]) -> Dict[str, SensorHealth]:
+    health: Dict[str, SensorHealth] = {}
+    for event in events:
+        if event.kind == KIND_HEARTBEAT and event.sequence is not None:
+            _register_heartbeat(health, event)
+    return health
+
+
+def _silent_sensors(health: Dict[str, SensorHealth], expected_sensors: Iterable[str]) -> List[str]:
+    return sorted(
+        name for name in set(expected_sensors)
+        if name not in health and SENSOR_NAME_PATTERN.match(name) is not None
+    )
+
+
+def _sensor_health_stats(health: Dict[str, SensorHealth], silent: List[str]) -> Dict[str, object]:
+    return {
+        "heartbeat_sensors": sorted(health),
+        "silent_sensors": silent,
+        "sensor_health": {
+            name: {
+                "heartbeats": record.heartbeats,
+                "last_sequence": record.last_sequence,
+                "gaps": record.gaps,
+                "restarts": record.restarts,
+                "dead": record.dead,
+            }
+            for name, record in sorted(health.items())
+        },
+    }
+
+
+def _sensor_health_text(health: Dict[str, SensorHealth], silent: List[str]) -> str:
+    dead = sorted(name for name, record in health.items() if record.dead)
+    restarted = sorted(name for name, record in health.items() if record.restarts)
+    gapped = sorted(name for name, record in health.items() if record.gaps)
+    parts = []
+    if silent:
+        parts.append("SENSOR SILENT (no heartbeat in this batch): " + ", ".join(silent))
+    if dead:
+        parts.append("SENSOR DEAD (its bpftrace process exited): " + ", ".join(dead))
+    if restarted:
+        parts.append("SENSOR RESTARTED (heartbeat sequence went back): " + ", ".join(restarted))
+    if gapped:
+        parts.append("HEARTBEAT GAPS (missed heartbeats): " + ", ".join(gapped))
+    if not parts:
+        return ""
+    return "SENSOR HEALTH WARNING: " + "; ".join(parts) + ". " + SENSOR_HEALTH_NOTE
+
+
 def _hard_limit(text: str) -> str:
     if len(text) <= DIGEST_MAX_CHARS:
         return text
@@ -1067,8 +1172,11 @@ def _build_stats(
 
 def build_digest(
     lines: Iterable[str], baseline: Optional[BaselineProfile] = None, known_monitor_pids: Iterable[int] = frozenset(),
+    expected_sensors: Iterable[str] = frozenset(),
 ) -> BatchDigest:
     events = [parse_event(line) for line in lines if line and line.strip()]
+    sensor_health = collect_sensor_health(events)
+    silent_sensors = _silent_sensors(sensor_health, expected_sensors)
     discovered_pids = _collect_supervisor_pids(events)
     noise_pids = discovered_pids | frozenset(known_monitor_pids)
     grouped, noise_count, lost = _aggregate(events, baseline, noise_pids)
@@ -1079,7 +1187,13 @@ def build_digest(
     baseline_groups = [group for group in ordinary if group.fully_in_baseline]
     ranked = _rank_groups([group for group in ordinary if not group.fully_in_baseline])
     head = HEADER_TEXT.format(total=stats["total"]) + "\n" + _totals_text(stats, _count_by_sensor(groups), lost)
-    extra_lines = [line for line in (_sandbox_summary(sandbox_groups), _baseline_summary(baseline_groups)) if line]
+    extra_lines = [
+        line for line in (
+            _sensor_health_text(sensor_health, silent_sensors),
+            _sandbox_summary(sandbox_groups),
+            _baseline_summary(baseline_groups),
+        ) if line
+    ]
     extra_chars = sum(len(line) + 1 for line in extra_lines)
     available = DIGEST_MAX_CHARS - len(head) - extra_chars - FOOTER_RESERVED_CHARS
     selected = _select_blocks(ranked, int(available * GROUPS_SECTION_SHARE))
@@ -1095,4 +1209,5 @@ def build_digest(
         "sandbox_events": sum(group.count for group in sandbox_groups),
         "chars": len(text),
     })
+    stats.update(_sensor_health_stats(sensor_health, silent_sensors))
     return BatchDigest(text=text, stats=stats)

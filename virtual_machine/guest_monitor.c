@@ -10,8 +10,17 @@
 #include <signal.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <poll.h>
+#include <time.h>
 
 #define MAX_MONITORS 10
+#define MAX_EVENT_SIZE 8192
+#define PIPE_CHUNK_SIZE 4096
+#define SENSOR_NAME_MAX 64
+#define SCRIPT_SUFFIX ".bt"
+#define HEARTBEAT_INTERVAL_SECONDS 5
+#define HEARTBEAT_MESSAGE_MAX 160
+#define HEARTBEAT_FORMAT "{\"e\":\"hb\",\"s\":\"%s\",\"q\":%u,\"a\":%d}\n"
 
 typedef struct
 {
@@ -156,13 +165,134 @@ static FILE *execute_command_and_get_pipe(const char *file, char *const argv[], 
     }
 }
 
+static int send_encrypted_line(int serial_fd, const char *line, size_t line_len)
+{
+    unsigned char ciphertext[MAX_EVENT_SIZE + AES_BLOCK_SIZE] = {0};
+    unsigned char message_to_send[sizeof(uint16_t) + sizeof(ciphertext)] = {0};
+
+    int ciphertext_len = encrypt((unsigned char *)line, (int)line_len, key, iv, ciphertext);
+
+    uint16_t payload_len_net = htons(ciphertext_len);
+    memcpy(message_to_send, &payload_len_net, sizeof(payload_len_net));
+    memcpy(message_to_send + sizeof(payload_len_net), ciphertext, ciphertext_len);
+
+    size_t total_to_write = sizeof(payload_len_net) + ciphertext_len;
+    ssize_t written_bytes = write_exact(serial_fd, message_to_send, total_to_write);
+
+    if (written_bytes < 0)
+    {
+        return -1;
+    }
+    if ((size_t)written_bytes < total_to_write)
+    {
+        return -1;
+    }
+    return 0;
+}
+
+static void sensor_name_from_path(const char *script_path, char *name_out, size_t name_out_size)
+{
+    const char *base = strrchr(script_path, '/');
+    base = (base != NULL) ? base + 1 : script_path;
+
+    size_t length = strlen(base);
+    size_t suffix_length = strlen(SCRIPT_SUFFIX);
+    if (length > suffix_length && strcmp(base + length - suffix_length, SCRIPT_SUFFIX) == 0)
+    {
+        length -= suffix_length;
+    }
+    if (length >= name_out_size)
+    {
+        length = name_out_size - 1;
+    }
+    memcpy(name_out, base, length);
+    name_out[length] = '\0';
+}
+
+static int child_is_alive(pid_t *child_pid)
+{
+    if (*child_pid <= 0)
+    {
+        return 0;
+    }
+    pid_t result = waitpid(*child_pid, NULL, WNOHANG);
+    if (result == 0)
+    {
+        return 1;
+    }
+    *child_pid = -1;
+    return 0;
+}
+
+static int send_heartbeat(int serial_fd, const char *sensor_name, unsigned int sequence, int alive)
+{
+    char message[HEARTBEAT_MESSAGE_MAX];
+    int length = snprintf(message, sizeof(message), HEARTBEAT_FORMAT, sensor_name, sequence, alive);
+    if (length <= 0 || (size_t)length >= sizeof(message))
+    {
+        return -1;
+    }
+    return send_encrypted_line(serial_fd, message, (size_t)length);
+}
+
+static int forward_event_line(const MonitorConfig *config, int serial_fd, const char *line, size_t line_len)
+{
+    printf("[%s] Sending event: %s", config->serial_device_path, line);
+    fflush(stdout);
+
+    if (send_encrypted_line(serial_fd, line, line_len) < 0)
+    {
+        fprintf(stderr, "[%s] Error writing to serial device. Shutting down this monitor.\n", config->serial_device_path);
+        return -1;
+    }
+    return 0;
+}
+
+static int drain_pipe_chunk(const MonitorConfig *config, int serial_fd, const char *chunk, ssize_t chunk_len,
+                            char *line, size_t *line_len)
+{
+    for (ssize_t index = 0; index < chunk_len; index++)
+    {
+        line[(*line_len)++] = chunk[index];
+        if (chunk[index] != '\n' && *line_len < MAX_EVENT_SIZE - 1)
+        {
+            continue;
+        }
+        line[*line_len] = '\0';
+        int status = forward_event_line(config, serial_fd, line, *line_len);
+        *line_len = 0;
+        if (status < 0)
+        {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int next_poll_timeout_ms(time_t next_heartbeat)
+{
+    time_t remaining = next_heartbeat - time(NULL);
+    if (remaining < 1)
+    {
+        return 1;
+    }
+    return (int)(remaining * 1000);
+}
+
 void run_monitor_instance(const MonitorConfig *config)
 {
     FILE *command_pipe;
     pid_t command_pid = -1;
     int serial_fd;
-#define MAX_EVENT_SIZE 8192
-    char buffer[MAX_EVENT_SIZE];
+    char sensor_name[SENSOR_NAME_MAX];
+    char line[MAX_EVENT_SIZE];
+    size_t line_len = 0;
+    unsigned int heartbeat_sequence = 0;
+    time_t next_heartbeat = 0;
+    int serial_failed = 0;
+    int stream_open = 1;
+
+    sensor_name_from_path(config->bpftrace_script_path, sensor_name, sizeof(sensor_name));
 
     printf("[PID %d] Starting monitor for %s -> %s\n", getpid(), config->bpftrace_script_path, config->serial_device_path);
 
@@ -190,37 +320,75 @@ void run_monitor_instance(const MonitorConfig *config)
         exit(EXIT_FAILURE);
     }
 
+    int pipe_fd = fileno(command_pipe);
+
     printf("[PID %d] Monitoring active. Encrypted output is being sent to the host.\n", getpid());
 
-    while (fgets(buffer, sizeof(buffer), command_pipe) != NULL)
+    while (stream_open && !serial_failed)
     {
-        printf("[%s] Sending event: %s", config->serial_device_path, buffer);
-        fflush(stdout);
-
-        unsigned char ciphertext[sizeof(buffer) + AES_BLOCK_SIZE] = {0};
-        unsigned char message_to_send[sizeof(uint16_t) + sizeof(ciphertext)] = {0};
-        int ciphertext_len;
-
-        ciphertext_len = encrypt((unsigned char *)buffer, strlen(buffer), key, iv, ciphertext);
-
-        uint16_t payload_len_net = htons(ciphertext_len);
-        memcpy(message_to_send, &payload_len_net, sizeof(payload_len_net));
-        memcpy(message_to_send + sizeof(payload_len_net), ciphertext, ciphertext_len);
-
-        size_t total_to_write = sizeof(payload_len_net) + ciphertext_len;
-        ssize_t written_bytes = write_exact(serial_fd, message_to_send, total_to_write);
-
-        if (written_bytes < 0)
+        if (time(NULL) >= next_heartbeat)
         {
-            fprintf(stderr, "[%s] Error writing to serial device. Shutting down this monitor.\n", config->serial_device_path);
+            int alive = child_is_alive(&command_pid);
+            if (send_heartbeat(serial_fd, sensor_name, heartbeat_sequence++, alive) < 0)
+            {
+                serial_failed = 1;
+                break;
+            }
+            next_heartbeat = time(NULL) + HEARTBEAT_INTERVAL_SECONDS;
+            if (!alive)
+            {
+                break;
+            }
+        }
+
+        struct pollfd pipe_poll = {.fd = pipe_fd, .events = POLLIN, .revents = 0};
+        int ready = poll(&pipe_poll, 1, next_poll_timeout_ms(next_heartbeat));
+        if (ready < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            perror("poll");
             break;
         }
-        if ((size_t)written_bytes < total_to_write)
+        if (ready == 0)
         {
-            fprintf(stderr, "[%s] Incomplete write to serial device (wrote %zd of %zu). Shutting down.\n",
-                    config->serial_device_path, written_bytes, total_to_write);
+            continue;
+        }
+
+        char chunk[PIPE_CHUNK_SIZE];
+        ssize_t chunk_len = read(pipe_fd, chunk, sizeof(chunk));
+        if (chunk_len < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            perror("read");
             break;
         }
+        if (chunk_len == 0)
+        {
+            stream_open = 0;
+            continue;
+        }
+        if (drain_pipe_chunk(config, serial_fd, chunk, chunk_len, line, &line_len) < 0)
+        {
+            serial_failed = 1;
+        }
+    }
+
+    if (!serial_failed && line_len > 0)
+    {
+        line[line_len] = '\0';
+        forward_event_line(config, serial_fd, line, line_len);
+    }
+
+    child_is_alive(&command_pid);
+    if (!serial_failed)
+    {
+        send_heartbeat(serial_fd, sensor_name, heartbeat_sequence, 0);
     }
 
     printf("[PID %d] Shutting down monitor for %s...\n", getpid(), config->bpftrace_script_path);

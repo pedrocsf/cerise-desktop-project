@@ -173,6 +173,7 @@ class PipelineState:
         self.baseline = {"profile": None, "batch_ids": []}
         self.llm_config = load_llm_config_from_env()
         self.monitor_pids = set()
+        self.heartbeat_sensors = set()
         self.incident = {"records": [], "active": False}
         self.vm_config = {"ram_mb": 8192, "cpus": 6, "detonation": True, "restore_snapshot": ""}
         self.attack_config = {"enabled": False}
@@ -214,6 +215,7 @@ class PipelineState:
                 "rag_ready": rag_ready.is_set() and rag_retriever is not None,
                 "hyde_degraded_count": self.hyde_degraded_count,
                 "monitor_pids": sorted(self.monitor_pids),
+                "heartbeat_sensors": sorted(self.heartbeat_sensors),
                 "incident": {
                     "active": self.incident["active"],
                     "records": [record["batch_id"] for record in self.incident["records"]],
@@ -322,6 +324,7 @@ def spawn_ttyd():
 
 def clear_run_memory_locked():
     state.monitor_pids = set()
+    state.heartbeat_sensors = set()
     state.incident = {"records": [], "active": False}
 
 
@@ -1129,13 +1132,30 @@ def digest_accepts_monitor_pids():
     return "known_monitor_pids" in inspect.signature(build_digest).parameters
 
 
+def digest_accepts_expected_sensors():
+    return "expected_sensors" in inspect.signature(build_digest).parameters
+
+
 def build_main_digest(events):
     baseline_profile = current_baseline_profile()
     if not digest_accepts_monitor_pids():
         return build_digest(events, baseline=baseline_profile)
     with state.lock:
         known_monitor_pids = frozenset(state.monitor_pids)
-    return build_digest(events, baseline=baseline_profile, known_monitor_pids=known_monitor_pids)
+        expected_sensors = frozenset(state.heartbeat_sensors)
+    if not digest_accepts_expected_sensors():
+        return build_digest(events, baseline=baseline_profile, known_monitor_pids=known_monitor_pids)
+    return build_digest(
+        events, baseline=baseline_profile, known_monitor_pids=known_monitor_pids, expected_sensors=expected_sensors,
+    )
+
+
+def accumulate_heartbeat_sensors(stats):
+    seen = stats.get("heartbeat_sensors", [])
+    if not seen:
+        return
+    with state.lock:
+        state.heartbeat_sensors.update(str(name) for name in seen)
 
 
 def accumulate_monitor_pids(stats):
@@ -1193,6 +1213,7 @@ def run_analysis(batch, force_manual_search=False, external=False):
         else:
             digest = build_main_digest(batch["events"])
             accumulate_monitor_pids(digest.stats)
+            accumulate_heartbeat_sensors(digest.stats)
     except Exception as error:
         fail_batch(batch, error, sse)
         raise

@@ -788,3 +788,130 @@ class LegacyOpenEventTests(unittest.TestCase):
     def test_legacy_and_openat_events_share_signature(self):
         legacy = LINE_FILE.replace("PID: 1015", "PID: 7")
         self.assertEqual(digest_module.event_signature(parse_event(legacy)), digest_module.event_signature(parse_event(LINE_FILE)))
+
+
+def heartbeat_line(sensor, sequence, alive=1, port="/dev/vport0p5"):
+    return f'[ebpf:{port}] {{"e":"hb","s":"{sensor}","q":{sequence},"a":{alive}}}'
+
+
+class HeartbeatParsingTests(unittest.TestCase):
+    def test_heartbeat_is_parsed_with_sensor_sequence_and_liveness(self):
+        event = parse_event(heartbeat_line("log_tampering", 7))
+        self.assertEqual((event.kind, event.target, event.sequence, event.alive), ("heartbeat", "log_tampering", 7, True))
+
+    def test_final_heartbeat_marks_the_sensor_as_not_alive(self):
+        self.assertFalse(parse_event(heartbeat_line("log_tampering", 9, alive=0)).alive)
+
+    def test_heartbeat_is_control_noise(self):
+        self.assertTrue(is_control_noise(parse_event(heartbeat_line("fileless_execution", 0))))
+
+    def test_invalid_sensor_name_is_not_accepted_as_heartbeat(self):
+        for name in ("../etc/passwd", "UPPER", "", "a" * 80, "x y"):
+            event = parse_event(heartbeat_line(name, 1))
+            self.assertEqual(event.kind, "unparsed", name)
+
+    def test_invalid_sequence_or_alive_value_is_not_accepted(self):
+        for line in (
+            '[ebpf:/dev/vport0p5] {"e":"hb","s":"log_tampering","q":-1,"a":1}',
+            '[ebpf:/dev/vport0p5] {"e":"hb","s":"log_tampering","q":"x","a":1}',
+            '[ebpf:/dev/vport0p5] {"e":"hb","s":"log_tampering","q":1,"a":2}',
+            '[ebpf:/dev/vport0p5] {"e":"hb","s":"log_tampering","q":1}',
+            '[ebpf:/dev/vport0p5] {"e":"hb","q":1,"a":1}',
+        ):
+            self.assertEqual(parse_event(line).kind, "unparsed", line)
+
+    def test_heartbeat_is_not_part_of_a_baseline(self):
+        profile = BaselineProfile.from_events([heartbeat_line("log_tampering", 0), heartbeat_line("log_tampering", 1)])
+        self.assertEqual(len(profile), 0)
+
+
+class SensorHealthTests(unittest.TestCase):
+    def healthy_lines(self):
+        return [heartbeat_line("log_tampering", sequence) for sequence in range(6)] + [
+            heartbeat_line("fileless_execution", sequence) for sequence in range(6)
+        ]
+
+    def test_healthy_sensors_add_no_warning_to_the_text(self):
+        result = build_digest(self.healthy_lines() + [LINE_CHMOD], expected_sensors=("log_tampering", "fileless_execution"))
+        self.assertNotIn("SENSOR", result.text)
+        self.assertEqual(result.stats["silent_sensors"], [])
+
+    def test_heartbeats_do_not_become_event_groups(self):
+        result = build_digest(self.healthy_lines() + [LINE_CHMOD])
+        self.assertEqual(result.stats["groups"], 1)
+        self.assertEqual(result.stats["control_noise"], 12)
+
+    def test_stats_report_health_per_sensor(self):
+        result = build_digest(self.healthy_lines())
+        health = result.stats["sensor_health"]["log_tampering"]
+        self.assertEqual((health["heartbeats"], health["last_sequence"], health["gaps"], health["restarts"], health["dead"]), (6, 5, 0, 0, False))
+        self.assertEqual(result.stats["heartbeat_sensors"], ["fileless_execution", "log_tampering"])
+
+    def test_expected_sensor_without_heartbeat_is_reported_silent(self):
+        lines = [heartbeat_line("log_tampering", sequence) for sequence in range(6)]
+        result = build_digest(lines + [LINE_CHMOD], expected_sensors=("log_tampering", "fileless_execution"))
+        self.assertEqual(result.stats["silent_sensors"], ["fileless_execution"])
+        self.assertIn("SENSOR SILENT", result.text)
+        self.assertIn("fileless_execution", result.text)
+        self.assertIn("defense evasion", result.text)
+
+    def test_batch_without_any_heartbeat_reports_every_expected_sensor_silent(self):
+        result = build_digest([LINE_CHMOD], expected_sensors=("a_sensor", "b_sensor"))
+        self.assertEqual(result.stats["silent_sensors"], ["a_sensor", "b_sensor"])
+
+    def test_no_expected_sensors_never_reports_silence(self):
+        result = build_digest([LINE_CHMOD])
+        self.assertEqual(result.stats["silent_sensors"], [])
+        self.assertNotIn("SENSOR", result.text)
+
+    def test_invalid_expected_sensor_names_are_ignored(self):
+        result = build_digest([LINE_CHMOD], expected_sensors=("Bad Name", "good_name"))
+        self.assertEqual(result.stats["silent_sensors"], ["good_name"])
+
+    def test_final_heartbeat_with_alive_zero_reports_dead_sensor(self):
+        lines = [heartbeat_line("log_tampering", 0), heartbeat_line("log_tampering", 1), heartbeat_line("log_tampering", 2, alive=0)]
+        result = build_digest(lines)
+        self.assertTrue(result.stats["sensor_health"]["log_tampering"]["dead"])
+        self.assertIn("SENSOR DEAD", result.text)
+
+    def test_sensor_that_comes_back_alive_after_a_dead_report_is_not_dead(self):
+        lines = [
+            heartbeat_line("log_tampering", 4, alive=0),
+            heartbeat_line("log_tampering", 0),
+            heartbeat_line("log_tampering", 1),
+        ]
+        health = build_digest(lines).stats["sensor_health"]["log_tampering"]
+        self.assertFalse(health["dead"])
+        self.assertEqual(health["restarts"], 1)
+
+    def test_sequence_going_back_counts_as_restart(self):
+        lines = [heartbeat_line("log_tampering", sequence) for sequence in (3, 4, 0, 1)]
+        result = build_digest(lines)
+        self.assertEqual(result.stats["sensor_health"]["log_tampering"]["restarts"], 1)
+        self.assertIn("SENSOR RESTARTED", result.text)
+
+    def test_repeated_sequence_counts_as_restart(self):
+        lines = [heartbeat_line("log_tampering", sequence) for sequence in (3, 3)]
+        self.assertEqual(build_digest(lines).stats["sensor_health"]["log_tampering"]["restarts"], 1)
+
+    def test_skipped_sequence_numbers_count_as_gaps(self):
+        lines = [heartbeat_line("log_tampering", sequence) for sequence in (0, 1, 4, 5)]
+        result = build_digest(lines)
+        self.assertEqual(result.stats["sensor_health"]["log_tampering"]["gaps"], 2)
+        self.assertIn("HEARTBEAT GAPS", result.text)
+
+    def test_number_of_tracked_sensors_is_bounded(self):
+        lines = [heartbeat_line(f"sensor_{index}", 0) for index in range(digest_module.MAX_TRACKED_SENSORS + 20)]
+        result = build_digest(lines)
+        self.assertEqual(len(result.stats["sensor_health"]), digest_module.MAX_TRACKED_SENSORS)
+
+    def test_health_warning_survives_a_batch_full_of_events(self):
+        noise = [LINE_FILE.replace("PID: 1015", f"PID: {pid}") for pid in range(2, 400)]
+        result = build_digest(noise + [LINE_CHMOD], expected_sensors=("log_tampering",))
+        self.assertIn("SENSOR SILENT", result.text)
+        self.assertLessEqual(len(result.text), DIGEST_MAX_CHARS)
+
+    def test_heartbeat_does_not_hide_real_events_from_a_baseline(self):
+        baseline = BaselineProfile.from_events([LINE_FILE])
+        result = build_digest([heartbeat_line("log_tampering", 0), LINE_FILE], baseline=baseline)
+        self.assertEqual(result.stats["in_baseline"], 1)

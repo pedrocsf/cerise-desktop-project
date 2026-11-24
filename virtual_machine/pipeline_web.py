@@ -1987,6 +1987,8 @@ DEMO_ATTACK_IDS_MAIN = [
     "T1571, T1071",
     "T1611",
     "T1070.002, T1070.003",
+    "T1685",
+    "T1685, T1685.003",
 ]
 DEMO_ATTACK_IDS_EXTERNAL = [
     "T1059.012, T1489, T1486",
@@ -2014,7 +2016,41 @@ def apply_demo_attack_variant(enabled):
 
 def seed_demo_batches():
     now = time.time()
-    ts = [now - (7 - i) * 40 for i in range(7)]
+    ts = [now - (9 - i) * 40 for i in range(9)]
+
+    sensor_ports = {
+        "dangerous_syscalls": "ch1",
+        "docker_socket_acess": "ch2",
+        "fileless_execution": "ch3",
+        "kernel_module_load": "ch4",
+        "log_tampering": "ch5",
+        "network_suspicious": "ch6",
+        "privilege_escalation": "ch7",
+        "sensitive_file_acess": "ch8",
+        "suspicious_exec": "ch9",
+        "persistence_activity": "ch11",
+    }
+    sensor_base_sequence = {name: 120 + 37 * index for index, name in enumerate(sensor_ports)}
+    heartbeat_interval_per_batch = 8
+
+    def heartbeat_line(sensor, batch_number, alive=1):
+        sequence = sensor_base_sequence[sensor] + heartbeat_interval_per_batch * (batch_number - 1)
+        return f'[ebpf:{sensor_ports[sensor]}] {{"e":"hb","s":"{sensor}","q":{sequence},"a":{alive}}}'
+
+    healthy_heartbeat_sensors = [
+        ["dangerous_syscalls", "log_tampering", "suspicious_exec"],
+        ["sensitive_file_acess", "privilege_escalation"],
+        ["dangerous_syscalls", "persistence_activity", "network_suspicious"],
+        ["fileless_execution", "log_tampering", "kernel_module_load"],
+        ["network_suspicious", "sensitive_file_acess", "docker_socket_acess"],
+        ["docker_socket_acess", "persistence_activity", "suspicious_exec"],
+        ["log_tampering", "sensitive_file_acess", "persistence_activity", "dangerous_syscalls"],
+    ]
+    live_sensors_after_tamper = [
+        "dangerous_syscalls", "docker_socket_acess", "fileless_execution", "kernel_module_load",
+        "network_suspicious", "privilege_escalation", "suspicious_exec",
+    ]
+    killed_sensors = ["log_tampering", "sensitive_file_acess", "persistence_activity"]
 
     net_pkg_1 = (
         '{"packet_number": 201, "timestamp": "2026-09-17T14:18:11.442019+00:00", '
@@ -2187,7 +2223,56 @@ def seed_demo_batches():
             "rag": {"category": "log_tampering", "confidence": "HIGH", "score": 0.89, "dense_similarity": 0.85, "categories": ["log_tampering"], "hyde_degraded": False},
             "tokens": 267, "duration": 6.0,
         },
+        {
+            "events": [
+                '[ebpf:ch1] {"e":"sensor_tamper","c":"upd8r","p":4903,"u":0,"s":9,"t":"bpftrace","tp":811}',
+                '[ebpf:ch1] {"e":"sensor_tamper","c":"upd8r","p":4903,"u":0,"s":9,"t":"bpftrace","tp":818}',
+                '[ebpf:ch1] {"e":"sensor_tamper","c":"upd8r","p":4903,"u":0,"s":9,"t":"bpftrace","tp":821}',
+            ]
+            + [heartbeat_line(name, 8, 0) for name in killed_sensors]
+            + [heartbeat_line(name, 8) for name in live_sensors_after_tamper],
+            "response": (
+                "VERDICT: THREAT\n"
+                "SEVERITY: 5\n"
+                "ANALYSIS: SENSOR HEALTH WARNING: the root-owned upd8r (PID 4903), the same process that "
+                "truncated the logs in the prior batch, sent three SIGKILL signals (signal 9) to bpftrace "
+                "processes (target PIDs 811, 818 and 821), and the log_tampering, sensitive_file_acess and "
+                "persistence_activity sensors each emitted a final heartbeat with alive=0 right after. This is "
+                "deliberate evasion following the log truncation in batch #7, not a crash: the kills come from "
+                "the attacker's own process chain (privilege escalation -> fileless execution -> C2 beacon -> "
+                "log tampering -> sensor termination). From this point on, coverage of sensitive files, logs and "
+                "persistence is blind, so the absence of events from those sensors must not be read as absence "
+                "of activity. Recommend isolating the VM immediately and treating every later event as "
+                "incomplete."
+            ),
+            "rag": {"category": "log_tampering", "confidence": "MEDIUM", "score": 0.66, "dense_similarity": 0.63, "categories": ["log_tampering", "privilege_escalation"], "hyde_degraded": False},
+            "tokens": 284, "duration": 6.5,
+        },
+        {
+            "events": [
+                '[ebpf:ch5] {"e":"auth_fail","why":"bad_mac","n":12}',
+                '[ebpf:ch5] {"e":"auth_fail","why":"replay","n":3}',
+            ]
+            + [heartbeat_line(name, 9) for name in live_sensors_after_tamper],
+            "response": (
+                "VERDICT: THREAT\n"
+                "SEVERITY: 5\n"
+                "ANALYSIS: TELEMETRY AUTHENTICATION WARNING: 15 frames were rejected on the channel of the "
+                "log_tampering sensor, which was killed in the previous batch (12 bad_mac and 3 replay). A "
+                "root attacker who already terminated the sensors is trying to inject forged telemetry or "
+                "replay captured frames to hide that the sensor died. The log_tampering, sensitive_file_acess "
+                "and persistence_activity sensors still have no heartbeat in this window, so their blind spot "
+                "persists. Telemetry authentication stopped the rejected frames from reaching the pipeline, so "
+                "nothing forged was analyzed as genuine. Keep the VM contained and do not trust any event "
+                "from those channels."
+            ),
+            "rag": {"category": "log_tampering", "confidence": "MEDIUM", "score": 0.6, "dense_similarity": 0.58, "categories": ["log_tampering"], "hyde_degraded": False},
+            "tokens": 262, "duration": 5.8,
+        },
     ]
+
+    for index, sensors in enumerate(healthy_heartbeat_sensors):
+        batches_raw[index]["events"] = batches_raw[index]["events"] + [heartbeat_line(name, index + 1) for name in sensors]
 
     batches = []
     ebpf_total, network_total = 0, 0

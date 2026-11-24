@@ -9,3 +9,4 @@ secrets/
 .eval_cache
 datasets/
 virtual_machine/novnc/
+virtual_machine/.session_key

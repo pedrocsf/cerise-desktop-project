@@ -11,6 +11,9 @@
 #include <sys/wait.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdint.h>
+#include <time.h>
+#include "frame_auth.h"
 
 static const uint8_t key[] = {'C', 'E', 'R', 'I', 'S', 'E', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const uint8_t iv[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
@@ -100,14 +103,125 @@ ssize_t read_exact(int fd, void *buf, size_t count)
     return bytes_read_total;
 }
 
+#define SESSION_KEY_FILE_ENV "CERISE_SESSION_KEY_FILE"
+#define DEFAULT_SESSION_KEY_FILE ".session_key"
+#define AUTH_EXTRA_BUFFER_BYTES 128
+#define AUTH_FAIL_INTERVAL_SECONDS 1
+#define SESSION_KEY_LINE_CAPACITY 128
+
+enum { AUTH_FAIL_BAD_MAC = 0, AUTH_FAIL_REPLAY, AUTH_FAIL_REASON_COUNT };
+
+static const char *const auth_fail_reason_names[AUTH_FAIL_REASON_COUNT] = {"bad_mac", "replay"};
+
+typedef struct
+{
+    time_t last_emit;
+    unsigned long pending;
+} auth_fail_limiter;
+
+typedef struct
+{
+    uint64_t last_counter;
+    auth_fail_limiter limiters[AUTH_FAIL_REASON_COUNT];
+} auth_port_state;
+
+static fa_keys session_keys;
+static int authenticated_mode = 0;
+
+static int load_session_keys(void)
+{
+    const char *path = getenv(SESSION_KEY_FILE_ENV);
+    char line[SESSION_KEY_LINE_CAPACITY];
+    FILE *key_file;
+
+    if (path == NULL)
+        path = DEFAULT_SESSION_KEY_FILE;
+    key_file = fopen(path, "r");
+    if (key_file == NULL)
+        return 0;
+    if (fgets(line, sizeof(line), key_file) == NULL)
+    {
+        fclose(key_file);
+        return 0;
+    }
+    fclose(key_file);
+    line[strcspn(line, "\r\n")] = '\0';
+    int derived = fa_derive_keys(line, &session_keys) == FA_OK;
+    OPENSSL_cleanse(line, sizeof(line));
+    return derived;
+}
+
+static void print_event_line(const char *serial_device_path, int use_prefix, const char *text)
+{
+    if (use_prefix)
+        printf("[%s] %s\n", serial_device_path, text);
+    else
+        printf("%s\n", text);
+    fflush(stdout);
+}
+
+static void record_auth_failure(const char *serial_device_path, int use_prefix, auth_port_state *state, int reason)
+{
+    auth_fail_limiter *limiter = &state->limiters[reason];
+    time_t now = time(NULL);
+    char json[96];
+
+    limiter->pending++;
+    if (limiter->last_emit != 0 && now - limiter->last_emit < AUTH_FAIL_INTERVAL_SECONDS)
+        return;
+    snprintf(json, sizeof(json), "{\"e\":\"auth_fail\",\"why\":\"%s\",\"n\":%lu}",
+             auth_fail_reason_names[reason], limiter->pending);
+    print_event_line(serial_device_path, use_prefix, json);
+    limiter->pending = 0;
+    limiter->last_emit = now;
+}
+
+static void trim_trailing_space(char *text, int length)
+{
+    char *end = text + length - 1;
+    while (end >= text && isspace((unsigned char)*end))
+    {
+        *end = '\0';
+        end--;
+    }
+}
+
+static void process_authenticated_frame(const char *serial_device_path, int use_prefix, auth_port_state *state,
+                                        const unsigned char *body, size_t body_len,
+                                        unsigned char *plain, size_t plain_capacity)
+{
+    uint64_t counter = 0;
+    size_t plain_len = 0;
+    int status = fa_open_body(&session_keys, body, body_len, &counter, plain, plain_capacity - 1, &plain_len);
+
+    if (status != FA_OK)
+    {
+        record_auth_failure(serial_device_path, use_prefix, state, AUTH_FAIL_BAD_MAC);
+        return;
+    }
+    if (counter <= state->last_counter)
+    {
+        record_auth_failure(serial_device_path, use_prefix, state, AUTH_FAIL_REPLAY);
+        return;
+    }
+    state->last_counter = counter;
+    plain[plain_len] = '\0';
+    trim_trailing_space((char *)plain, (int)plain_len);
+    print_event_line(serial_device_path, use_prefix, (const char *)plain);
+}
+
 static int listen_on_serial(const char *serial_device_path, int use_prefix)
 {
 #define MAX_EVENT_SIZE 8192
     int serial_fd = -1;
     struct termios old_tty;
 
-    unsigned char read_buffer[MAX_EVENT_SIZE + AES_BLOCK_SIZE];
+    unsigned char read_buffer[MAX_EVENT_SIZE + AUTH_EXTRA_BUFFER_BYTES];
     unsigned char decrypted_buffer[MAX_EVENT_SIZE + AES_BLOCK_SIZE];
+    const size_t read_limit = authenticated_mode ? sizeof(read_buffer) : MAX_EVENT_SIZE + AES_BLOCK_SIZE;
+    auth_port_state auth_state;
+
+    memset(&auth_state, 0, sizeof(auth_state));
 
     printf("Waiting for encrypted data on %s...\n", serial_device_path);
 
@@ -174,7 +288,7 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
         {
             break;
         }
-        if (len_bytes_read < sizeof(payload_len_net))
+        if ((size_t)len_bytes_read < sizeof(payload_len_net))
         {
             if (use_prefix)
                 fprintf(stderr, "[%s] Error: Failed to read payload size header (connection closed?).\n", serial_device_path);
@@ -185,16 +299,16 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
 
         uint16_t payload_len = ntohs(payload_len_net);
 
-        if (payload_len > sizeof(read_buffer))
+        if (payload_len > read_limit)
         {
             if (use_prefix)
-                fprintf(stderr, "[%s] Error: Received payload (%u bytes) is larger than the read buffer (%zu bytes).\n", serial_device_path, payload_len, sizeof(read_buffer));
+                fprintf(stderr, "[%s] Error: Received payload (%u bytes) is larger than the read buffer (%zu bytes).\n", serial_device_path, payload_len, read_limit);
             else
-                fprintf(stderr, "Error: Received payload (%u bytes) is larger than the read buffer (%zu bytes).\n", payload_len, sizeof(read_buffer));
+                fprintf(stderr, "Error: Received payload (%u bytes) is larger than the read buffer (%zu bytes).\n", payload_len, read_limit);
             break;
         }
 
-        if (payload_len == 0 || payload_len % AES_BLOCK_SIZE != 0)
+        if (payload_len == 0 || (!authenticated_mode && payload_len % AES_BLOCK_SIZE != 0))
         {
             if (use_prefix)
                 fprintf(stderr, "[%s] Error: Received payload size (%u) is not a non-zero multiple of AES block size (%d). Framing error.\n", serial_device_path, payload_len, AES_BLOCK_SIZE);
@@ -220,6 +334,13 @@ static int listen_on_serial(const char *serial_device_path, int use_prefix)
             else
                 fprintf(stderr, "Error: Incomplete payload. Expected %u, received %zd.\n", payload_len, payload_bytes_read);
             break;
+        }
+
+        if (authenticated_mode)
+        {
+            process_authenticated_frame(serial_device_path, use_prefix, &auth_state, read_buffer, payload_len,
+                                        decrypted_buffer, sizeof(decrypted_buffer));
+            continue;
         }
 
         int decrypted_len;
@@ -269,6 +390,10 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Example (multi):  %s /dev/pts/4 /dev/pts/5 /dev/pts/6\n", argv[0]);
         return EXIT_FAILURE;
     }
+
+    authenticated_mode = load_session_keys();
+    printf(authenticated_mode ? "authenticated mode\n" : "legacy mode\n");
+    fflush(stdout);
 
     if (argc == 2)
     {

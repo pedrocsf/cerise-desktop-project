@@ -11,6 +11,11 @@
 #define QEMU_PID_FILE "qemu_vm.pid"
 #define QEMU_QMP_SOCKET "qemu_qmp.sock"
 #define SERIAL_PORTS_FILE "serial_ports.list"
+#define SESSION_KEY_FILE ".session_key"
+#define SESSION_KEY_BYTES 16
+#define SESSION_KEY_HEX_LENGTH (SESSION_KEY_BYTES * 2)
+#define SESSION_KEY_FILE_MODE 0600
+#define SMBIOS_KEY_PREFIX "-smbios type=11,value=cerisekey="
 #define VM_SHARED_DIR "/home/pedro/Github/cerise-desktop-project/virtual_machine/vm_shared"
 
 #define VIRTFS_ARGS "-virtfs local,path=" VM_SHARED_DIR ",mount_tag=cerise_share,security_model=mapped-xattr,id=cerise_share "
@@ -21,6 +26,7 @@
                      "-machine q35,accel=kvm "                                                \
                      "-cpu host "                                                             \
                      "-drive file=/home/pedro/Downloads/cerise.qcow2,format=qcow2,cache=writeback " \
+                     "%s"                                                                     \
                      "%s"                                                                     \
                      "%s"                                                                     \
                      "-netdev user,id=net0%s,hostfwd=tcp::2222-:22 "                         \
@@ -75,6 +81,7 @@ int check_qemu_status();
 void show_serial_ports();
 void cleanup_and_exit(int signum);
 void load_pid_from_file();
+int prepare_session_key(char *smbios_args, size_t size);
 void save_ports_to_file(void);
 
 int main(int argc, char *argv[])
@@ -194,8 +201,16 @@ int start_qemu_vm()
     const char *snapshot_args = detonation ? "-snapshot " : "";
     const char *virtfs_args = detonation ? "" : VIRTFS_ARGS;
 
+    char smbios_args[sizeof(SMBIOS_KEY_PREFIX) + SESSION_KEY_HEX_LENGTH + 2];
+    if (!prepare_session_key(smbios_args, sizeof(smbios_args)))
+    {
+        printf("\n[ERROR] Failed to prepare the session key.\n");
+        pause_screen();
+        return 0;
+    }
+
     char qemu_cmd[8192];
-    snprintf(qemu_cmd, sizeof(qemu_cmd), QEMU_COMMAND_FMT, ram_mb, cpus, snapshot_args, virtfs_args, net_restrict);
+    snprintf(qemu_cmd, sizeof(qemu_cmd), QEMU_COMMAND_FMT, ram_mb, cpus, snapshot_args, virtfs_args, smbios_args, net_restrict);
 
     /* Redirect stderr to stdout so we can capture chardev pty assignments */
     char cmd_with_redirect[8224];
@@ -288,6 +303,7 @@ int stop_qemu_vm()
         remove(QEMU_PID_FILE);
         remove(SERIAL_PORTS_FILE);
         remove(QEMU_QMP_SOCKET);
+    remove(SESSION_KEY_FILE);
         pause_screen();
         return 1;
     }
@@ -308,6 +324,7 @@ int stop_qemu_vm()
     remove(QEMU_PID_FILE);
     remove(SERIAL_PORTS_FILE);
     remove(QEMU_QMP_SOCKET);
+    remove(SESSION_KEY_FILE);
     pause_screen();
     return stopped;
 }
@@ -364,6 +381,81 @@ void show_serial_ports()
     pause_screen();
 }
 
+int read_random_bytes(unsigned char *buffer, size_t length)
+{
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0)
+        return 0;
+    size_t total = 0;
+    while (total < length)
+    {
+        ssize_t n = read(fd, buffer + total, length - total);
+        if (n <= 0)
+        {
+            close(fd);
+            return 0;
+        }
+        total += (size_t)n;
+    }
+    close(fd);
+    return 1;
+}
+
+int write_session_key_file(const char *hex)
+{
+    int fd = open(SESSION_KEY_FILE, O_WRONLY | O_CREAT | O_TRUNC, SESSION_KEY_FILE_MODE);
+    if (fd < 0)
+        return 0;
+    size_t length = strlen(hex);
+    size_t total = 0;
+    while (total < length)
+    {
+        ssize_t n = write(fd, hex + total, length - total);
+        if (n <= 0)
+        {
+            close(fd);
+            return 0;
+        }
+        total += (size_t)n;
+    }
+    return close(fd) == 0;
+}
+
+int prepare_session_key(char *smbios_args, size_t size)
+{
+    smbios_args[0] = '\0';
+
+    const char *auth_env = getenv("CERISE_AUTH");
+    if (!auth_env || strcmp(auth_env, "1") != 0)
+    {
+        remove(SESSION_KEY_FILE);
+        return 1;
+    }
+
+    unsigned char raw[SESSION_KEY_BYTES];
+    if (!read_random_bytes(raw, sizeof(raw)))
+        return 0;
+
+    char hex[SESSION_KEY_HEX_LENGTH + 1];
+    for (int i = 0; i < SESSION_KEY_BYTES; i++)
+        snprintf(hex + i * 2, 3, "%02x", raw[i]);
+
+    if (!write_session_key_file(hex))
+    {
+        remove(SESSION_KEY_FILE);
+        return 0;
+    }
+
+    int written = snprintf(smbios_args, size, SMBIOS_KEY_PREFIX "%s ", hex);
+    if (written < 0 || (size_t)written >= size)
+    {
+        smbios_args[0] = '\0';
+        remove(SESSION_KEY_FILE);
+        return 0;
+    }
+    return 1;
+}
+
 void load_pid_from_file()
 {
     FILE *f = fopen(QEMU_PID_FILE, "r");
@@ -384,6 +476,7 @@ void load_pid_from_file()
 
 void cleanup_and_exit(int signum)
 {
+    (void)signum;
     printf("\n\nExit requested. Stopping VM if it is running...\n");
     if (qemu_pid > 0 && kill(qemu_pid, 0) == 0)
     {

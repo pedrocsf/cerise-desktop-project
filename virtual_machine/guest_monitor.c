@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <time.h>
+#include "frame_auth.h"
 
 #define MAX_MONITORS 10
 #define MAX_EVENT_SIZE 8192
@@ -21,6 +22,13 @@
 #define HEARTBEAT_INTERVAL_SECONDS 5
 #define HEARTBEAT_MESSAGE_MAX 160
 #define HEARTBEAT_FORMAT "{\"e\":\"hb\",\"s\":\"%s\",\"q\":%u,\"a\":%d}\n"
+#define DMI_TYPE11_PATH "/sys/firmware/dmi/tables/DMI"
+#define DMI_RAW_MAX_BYTES 65536
+#define SMBIOS_TYPE_OEM_STRINGS 11
+#define SESSION_KEY_NAME "cerisekey"
+#define FRAME_OVERHEAD_MARGIN 128
+#define FRAME_BUFFER_SIZE (MAX_EVENT_SIZE + FRAME_OVERHEAD_MARGIN)
+#define NANOSECONDS_PER_SECOND 1000000000ULL
 
 typedef struct
 {
@@ -165,8 +173,105 @@ static FILE *execute_command_and_get_pipe(const char *file, char *const argv[], 
     }
 }
 
+static fa_keys session_keys;
+static int authenticated_mode = 0;
+static uint64_t last_frame_counter = 0;
+
+static uint64_t next_frame_counter(void)
+{
+    struct timespec now;
+    uint64_t counter;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    counter = (uint64_t)now.tv_sec * NANOSECONDS_PER_SECOND + (uint64_t)now.tv_nsec;
+    if (counter <= last_frame_counter)
+    {
+        counter = last_frame_counter + 1;
+    }
+    last_frame_counter = counter;
+    return counter;
+}
+
+static unsigned char dmi_table_buffer[DMI_RAW_MAX_BYTES + 1];
+
+static ssize_t read_dmi_raw(unsigned char *buffer, size_t capacity)
+{
+    int dmi_fd = open(DMI_TYPE11_PATH, O_RDONLY);
+    if (dmi_fd < 0)
+    {
+        return -1;
+    }
+    size_t total_bytes = 0;
+    while (total_bytes < capacity)
+    {
+        ssize_t read_bytes = read(dmi_fd, buffer + total_bytes, capacity - total_bytes);
+        if (read_bytes < 0)
+        {
+            close(dmi_fd);
+            return -1;
+        }
+        if (read_bytes == 0)
+        {
+            break;
+        }
+        total_bytes += (size_t)read_bytes;
+    }
+    close(dmi_fd);
+    return (ssize_t)total_bytes;
+}
+
+static int load_session_keys(void)
+{
+    char session_key_hex[FA_SESSION_KEY_HEX_LEN + 1];
+    const unsigned char *structure = NULL;
+    size_t structure_len = 0;
+    int status;
+
+    ssize_t raw_len = read_dmi_raw(dmi_table_buffer, sizeof(dmi_table_buffer));
+    if (raw_len <= 0 || (size_t)raw_len > DMI_RAW_MAX_BYTES)
+    {
+        OPENSSL_cleanse(dmi_table_buffer, sizeof(dmi_table_buffer));
+        return -1;
+    }
+    status = fa_find_smbios_structure(dmi_table_buffer, (size_t)raw_len, SMBIOS_TYPE_OEM_STRINGS, &structure, &structure_len);
+    if (status == FA_OK)
+    {
+        status = fa_parse_dmi_type11(structure, structure_len, SESSION_KEY_NAME, session_key_hex, sizeof(session_key_hex));
+    }
+    if (status == FA_OK)
+    {
+        status = fa_derive_keys(session_key_hex, &session_keys);
+    }
+    OPENSSL_cleanse(session_key_hex, sizeof(session_key_hex));
+    OPENSSL_cleanse(dmi_table_buffer, sizeof(dmi_table_buffer));
+    return status == FA_OK ? 0 : -1;
+}
+
+static int send_authenticated_line(int serial_fd, const char *line, size_t line_len)
+{
+    unsigned char frame[FRAME_BUFFER_SIZE];
+    size_t frame_len = 0;
+
+    int status = fa_build_frame(&session_keys, next_frame_counter(), (const unsigned char *)line, line_len,
+                                frame, sizeof(frame), &frame_len);
+    if (status != FA_OK)
+    {
+        return -1;
+    }
+    ssize_t written_bytes = write_exact(serial_fd, frame, frame_len);
+    if (written_bytes < 0 || (size_t)written_bytes < frame_len)
+    {
+        return -1;
+    }
+    return 0;
+}
+
 static int send_encrypted_line(int serial_fd, const char *line, size_t line_len)
 {
+    if (authenticated_mode)
+    {
+        return send_authenticated_line(serial_fd, line, line_len);
+    }
+
     unsigned char ciphertext[MAX_EVENT_SIZE + AES_BLOCK_SIZE] = {0};
     unsigned char message_to_send[sizeof(uint16_t) + sizeof(ciphertext)] = {0};
 
@@ -431,6 +536,10 @@ int main(void)
         fprintf(stderr, "Error: Number of configured monitors exceeds MAX_MONITORS limit.\n");
         return EXIT_FAILURE;
     }
+
+    authenticated_mode = load_session_keys() == 0;
+    printf(authenticated_mode ? "authenticated mode\n" : "legacy mode\n");
+    fflush(stdout);
 
     signal(SIGINT, cleanup_handler);
     signal(SIGTERM, cleanup_handler);

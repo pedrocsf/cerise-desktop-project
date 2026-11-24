@@ -25,6 +25,8 @@ SENSOR_BANNER = "banner"
 SENSOR_BPFTRACE_RUNTIME = "bpftrace_runtime"
 SENSOR_HEARTBEAT = "heartbeat"
 SENSOR_UNKNOWN = "unknown"
+SENSOR_TAMPER = "sensor_tamper"
+SENSOR_TELEMETRY_AUTH = "telemetry_auth"
 
 KIND_UNPARSED = "unparsed"
 KIND_BANNER = "banner"
@@ -45,6 +47,8 @@ KIND_FLOW = "flow"
 KIND_DNS_QUERY = "dns_query"
 KIND_DNS_RESPONSE = "dns_response"
 KIND_ARP = "arp"
+KIND_SENSOR_TAMPER = "sensor_tamper"
+KIND_AUTH_FAILURE = "auth_failure"
 
 FLAG_CHMOD_CALLED = "CHMOD_CALLED"
 FLAG_ROOT_TRANSITION = "ROOT_TRANSITION"
@@ -56,6 +60,15 @@ FLAG_TCP_SYN = "TCP_SYN"
 FLAG_TCP_RST = "TCP_RST"
 FLAG_PERSISTENCE_WRITE = "PERSISTENCE_WRITE"
 FLAG_MASS_FILE_OPS = "MASS_FILE_OPS"
+FLAG_SENSOR_TAMPER = "SENSOR_TAMPER"
+TAMPER_TARGET_LIMIT = 80
+AUTH_REASON_LIMIT = 40
+AUTH_FAILURE_EVENT_NAME = "auth_fail"
+TAMPER_EVENT_NAME = "sensor_tamper"
+AUTH_WARNING_NOTE = (
+    "The telemetry channel may be under forgery or replay by the malware; "
+    "treat the batch contents with suspicion and say so in the analysis."
+)
 
 SEVERE_FLAGS = frozenset({
     "SUSPICIOUS_PATH",
@@ -71,6 +84,7 @@ SEVERE_FLAGS = frozenset({
     FLAG_ACCESS_READ_WRITE,
     FLAG_PERSISTENCE_WRITE,
     FLAG_MASS_FILE_OPS,
+    FLAG_SENSOR_TAMPER,
     "O_TRUNC",
 })
 SEVERE_KINDS = frozenset({
@@ -81,6 +95,8 @@ SEVERE_KINDS = frozenset({
     KIND_RENAME_TO_SERVED_DIR,
     KIND_PERSISTENCE,
     KIND_MASS_FILE_OPS,
+    KIND_SENSOR_TAMPER,
+    KIND_AUTH_FAILURE,
     "ptrace",
     "kexec_load",
     "chroot",
@@ -410,7 +426,30 @@ def _parse_heartbeat_json(raw: str, payload: dict) -> Optional[ParsedEvent]:
     )
 
 
+def _parse_sensor_tamper_json(raw: str, payload: dict) -> ParsedEvent:
+    signal = _to_int(payload.get("s"))
+    target_pid = _to_int(payload.get("tp"))
+    return ParsedEvent(
+        source=SOURCE_EBPF, sensor=SENSOR_TAMPER, kind=KIND_SENSOR_TAMPER, comm=str(payload.get("c") or ""),
+        pid=_to_int(payload.get("p")), uid=_to_int(payload.get("u")),
+        target=_clip(str(payload.get("t") or ""), TAMPER_TARGET_LIMIT),
+        detail=f"signal={signal} target_pid={target_pid}", flags=(FLAG_SENSOR_TAMPER,), raw=raw,
+    )
+
+
+def _parse_auth_failure_json(raw: str, payload: dict) -> ParsedEvent:
+    frames = _to_int(payload.get("n"))
+    if frames is None or frames < 1:
+        frames = 1
+    return ParsedEvent(
+        source=SOURCE_EBPF, sensor=SENSOR_TELEMETRY_AUTH, kind=KIND_AUTH_FAILURE,
+        target=_clip(str(payload.get("why") or ""), AUTH_REASON_LIMIT), count=frames, raw=raw,
+    )
+
+
 EBPF_CUSTOM_PARSERS = {
+    TAMPER_EVENT_NAME: _parse_sensor_tamper_json,
+    AUTH_FAILURE_EVENT_NAME: _parse_auth_failure_json,
     HEARTBEAT_EVENT_NAME: _parse_heartbeat_json,
     "persistence": _parse_persistence_json,
     "mass_file_ops": _parse_mass_file_ops_json,
@@ -780,10 +819,10 @@ class _Group:
         self.network_target = event.target if event.source == SOURCE_NETWORK else ""
 
     def add(self, event: ParsedEvent, in_baseline: bool) -> None:
-        self.count += 1
+        self.count += event.count
         self.last_raw = event.raw
         if in_baseline:
-            self.baseline_hits += 1
+            self.baseline_hits += event.count
         if event.pid is not None:
             self.pids.add(event.pid)
         self.operations += event.operations
@@ -1123,6 +1162,22 @@ def _sensor_health_text(health: Dict[str, SensorHealth], silent: List[str]) -> s
     return "SENSOR HEALTH WARNING: " + "; ".join(parts) + ". " + SENSOR_HEALTH_NOTE
 
 
+def _auth_failure_events(events: Iterable[ParsedEvent]) -> List[ParsedEvent]:
+    return [event for event in events if event.kind == KIND_AUTH_FAILURE]
+
+
+def _auth_warning_text(events: List[ParsedEvent]) -> str:
+    failures = _auth_failure_events(events)
+    if not failures:
+        return ""
+    total = sum(event.count for event in failures)
+    reasons = ", ".join(sorted({event.target for event in failures if event.target})) or "unknown"
+    return (
+        f"TELEMETRY AUTHENTICATION WARNING: {total} telemetry frame(s) from the guest failed "
+        f"authentication ({reasons}). {AUTH_WARNING_NOTE}"
+    )
+
+
 def _hard_limit(text: str) -> str:
     if len(text) <= DIGEST_MAX_CHARS:
         return text
@@ -1190,6 +1245,7 @@ def build_digest(
     extra_lines = [
         line for line in (
             _sensor_health_text(sensor_health, silent_sensors),
+            _auth_warning_text(events),
             _sandbox_summary(sandbox_groups),
             _baseline_summary(baseline_groups),
         ) if line
@@ -1210,4 +1266,7 @@ def build_digest(
         "chars": len(text),
     })
     stats.update(_sensor_health_stats(sensor_health, silent_sensors))
+    auth_failures = sum(event.count for event in _auth_failure_events(events))
+    if auth_failures:
+        stats["auth_failures"] = auth_failures
     return BatchDigest(text=text, stats=stats)

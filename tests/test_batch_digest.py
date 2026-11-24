@@ -915,3 +915,65 @@ class SensorHealthTests(unittest.TestCase):
         baseline = BaselineProfile.from_events([LINE_FILE])
         result = build_digest([heartbeat_line("log_tampering", 0), LINE_FILE], baseline=baseline)
         self.assertEqual(result.stats["in_baseline"], 1)
+
+
+def json_line(payload):
+    return "[ebpf:/dev/vport0p5] " + json.dumps(payload)
+
+
+def auth_line(why, count):
+    return json_line({"e": "auth_fail", "why": why, "n": count})
+
+
+class SensorTamperAndAuthTests(unittest.TestCase):
+    TAMPER = {"e": "sensor_tamper", "c": "evil", "p": 50, "u": 0, "s": 9, "t": "bpftrace", "tp": 77}
+
+    def test_sensor_tamper_is_parsed(self):
+        event = parse_event(json_line(self.TAMPER))
+        self.assertEqual((event.sensor, event.kind), ("sensor_tamper", "sensor_tamper"))
+        self.assertEqual((event.comm, event.pid, event.uid, event.target), ("evil", 50, 0, "bpftrace"))
+        self.assertEqual((event.detail, event.flags), ("signal=9 target_pid=77", ("SENSOR_TAMPER",)))
+
+    def test_sensor_tamper_target_is_clipped(self):
+        event = parse_event(json_line(dict(self.TAMPER, t="x" * 200)))
+        self.assertLessEqual(len(event.target), 80)
+
+    def test_sensor_tamper_with_missing_fields_does_not_raise(self):
+        event = parse_event(json_line({"e": "sensor_tamper"}))
+        self.assertEqual((event.kind, event.comm, event.pid, event.target), ("sensor_tamper", "", None, ""))
+
+    def test_auth_failure_is_parsed(self):
+        event = parse_event(auth_line("bad_mac", 5))
+        self.assertEqual((event.sensor, event.kind, event.target, event.count), ("telemetry_auth", "auth_failure", "bad_mac", 5))
+
+    def test_auth_failure_invalid_count_defaults_to_one(self):
+        for value in (None, 0, -3, "x"):
+            self.assertEqual(parse_event(auth_line("replay", value)).count, 1)
+
+    def test_auth_failure_reason_is_clipped(self):
+        self.assertLessEqual(len(parse_event(auth_line("y" * 100, 1)).target), 40)
+
+    def test_tamper_and_auth_failure_rank_above_common_events(self):
+        lines = [LINE_FILE, LINE_FILE.replace("PID: 1015", "PID: 2"), json_line(self.TAMPER), auth_line("replay", 1)]
+        groups, _, _ = digest_module._aggregate([parse_event(line) for line in lines], None, frozenset())
+        ordered = digest_module._rank_groups(list(groups.values()))
+        self.assertEqual({group.sensor for group in ordered[:2]}, {"sensor_tamper", "telemetry_auth"})
+        self.assertTrue(all(group.severe for group in ordered[:2]))
+
+    def test_tamper_from_monitor_comm_is_control_noise(self):
+        self.assertTrue(is_control_noise(parse_event(json_line(dict(self.TAMPER, c="guest_monitor")))))
+
+    def test_auth_failure_counts_are_summed(self):
+        result = build_digest([auth_line("bad_mac", 3), auth_line("bad_mac", 4), auth_line("replay", 2)])
+        self.assertEqual(result.stats["auth_failures"], 9)
+        self.assertIn("TELEMETRY AUTHENTICATION WARNING: 9 telemetry frame(s)", result.text)
+        self.assertIn("(bad_mac, replay)", result.text)
+
+    def test_auth_warning_comes_after_health_warning(self):
+        text = build_digest([auth_line("replay", 1)], expected_sensors=("log_tampering",)).text
+        self.assertLess(text.index("SENSOR HEALTH WARNING"), text.index("TELEMETRY AUTHENTICATION WARNING"))
+
+    def test_no_warning_or_stat_without_auth_failure(self):
+        result = build_digest([LINE_FILE, json_line(self.TAMPER)])
+        self.assertNotIn("auth_failures", result.stats)
+        self.assertNotIn("TELEMETRY AUTHENTICATION", result.text)

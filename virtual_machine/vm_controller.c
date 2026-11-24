@@ -15,7 +15,10 @@
 #define SESSION_KEY_BYTES 16
 #define SESSION_KEY_HEX_LENGTH (SESSION_KEY_BYTES * 2)
 #define SESSION_KEY_FILE_MODE 0600
-#define SMBIOS_KEY_PREFIX "-smbios type=11,value=cerisekey="
+#define SMBIOS_BASE "-smbios type=11"
+#define SMBIOS_KEY_VALUE ",value=cerisekey="
+#define SMBIOS_LOCKDOWN_VALUE ",value=cerisemodlock=1"
+#define SMBIOS_ARGS_SIZE (sizeof(SMBIOS_BASE) + sizeof(SMBIOS_KEY_VALUE) + SESSION_KEY_HEX_LENGTH + sizeof(SMBIOS_LOCKDOWN_VALUE) + 2)
 #define VM_SHARED_DIR "/home/pedro/Github/cerise-desktop-project/virtual_machine/vm_shared"
 
 #define VIRTFS_ARGS "-virtfs local,path=" VM_SHARED_DIR ",mount_tag=cerise_share,security_model=mapped-xattr,id=cerise_share "
@@ -82,6 +85,8 @@ void show_serial_ports();
 void cleanup_and_exit(int signum);
 void load_pid_from_file();
 int prepare_session_key(char *smbios_args, size_t size);
+int build_smbios_args(char *smbios_args, size_t size, const char *key_hex, int lockdown);
+int env_flag_enabled(const char *name);
 void save_ports_to_file(void);
 
 int main(int argc, char *argv[])
@@ -201,7 +206,7 @@ int start_qemu_vm()
     const char *snapshot_args = detonation ? "-snapshot " : "";
     const char *virtfs_args = detonation ? "" : VIRTFS_ARGS;
 
-    char smbios_args[sizeof(SMBIOS_KEY_PREFIX) + SESSION_KEY_HEX_LENGTH + 2];
+    char smbios_args[SMBIOS_ARGS_SIZE];
     if (!prepare_session_key(smbios_args, sizeof(smbios_args)))
     {
         printf("\n[ERROR] Failed to prepare the session key.\n");
@@ -421,15 +426,38 @@ int write_session_key_file(const char *hex)
     return close(fd) == 0;
 }
 
+int env_flag_enabled(const char *name)
+{
+    const char *value = getenv(name);
+    return value && strcmp(value, "1") == 0;
+}
+
+int build_smbios_args(char *smbios_args, size_t size, const char *key_hex, int lockdown)
+{
+    smbios_args[0] = '\0';
+    if (!key_hex && !lockdown)
+        return 1;
+
+    int written = snprintf(smbios_args, size, SMBIOS_BASE "%s%s%s ",
+                           key_hex ? SMBIOS_KEY_VALUE : "", key_hex ? key_hex : "",
+                           lockdown ? SMBIOS_LOCKDOWN_VALUE : "");
+    if (written < 0 || (size_t)written >= size)
+    {
+        smbios_args[0] = '\0';
+        return 0;
+    }
+    return 1;
+}
+
 int prepare_session_key(char *smbios_args, size_t size)
 {
     smbios_args[0] = '\0';
+    int lockdown = env_flag_enabled("CERISE_MODULE_LOCKDOWN");
 
-    const char *auth_env = getenv("CERISE_AUTH");
-    if (!auth_env || strcmp(auth_env, "1") != 0)
+    if (!env_flag_enabled("CERISE_AUTH"))
     {
         remove(SESSION_KEY_FILE);
-        return 1;
+        return build_smbios_args(smbios_args, size, NULL, lockdown);
     }
 
     unsigned char raw[SESSION_KEY_BYTES];
@@ -446,10 +474,8 @@ int prepare_session_key(char *smbios_args, size_t size)
         return 0;
     }
 
-    int written = snprintf(smbios_args, size, SMBIOS_KEY_PREFIX "%s ", hex);
-    if (written < 0 || (size_t)written >= size)
+    if (!build_smbios_args(smbios_args, size, hex, lockdown))
     {
-        smbios_args[0] = '\0';
         remove(SESSION_KEY_FILE);
         return 0;
     }

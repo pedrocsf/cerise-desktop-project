@@ -1,0 +1,12 @@
+[Unit]
+Description=Cerise kernel module lockdown
+After=cerise-guest-monitor.service
+Wants=cerise-guest-monitor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/cerise/cerise-lockdown.sh
+
+[Install]
+WantedBy=multi-user.target

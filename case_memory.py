@@ -42,7 +42,6 @@ def _closest_similarity(collection, embedding):
 
 
 def check_duplicate(summary_text, client=None):
-    owns_client = client is None
     client = client or chromadb.PersistentClient(path=DB_DIR)
     docs, cases = _get_collections(client)
     model = _load_model()

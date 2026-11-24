@@ -24,7 +24,7 @@ except ImportError as e:
 try:
     from scapy.all import (
         sniff, IP, IPv6, TCP, UDP, ICMP, DNS, DNSQR, DNSRR,
-        Raw, ARP, Ether, conf, get_if_list,
+        Raw, ARP, Ether, get_if_list,
     )
     import logging
     logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
@@ -322,7 +322,7 @@ def _extract_tls_info(payload_bytes: bytes) -> Optional[dict]:
 def process_packet(packet):
     try:
         _process_packet_internal(packet)
-    except Exception as e:
+    except Exception:
         traceback.print_exc(file=error_log_file)
         error_log_file.flush()
 
@@ -355,10 +355,8 @@ def _process_packet_internal(packet):
         _print_json(result)
         return
 
-    ip_layer = None
     if packet.haslayer(IP):
         ip = packet[IP]
-        ip_layer = ip
         result["network"] = {
             "version": 4,
             "src_ip": ip.src,
@@ -375,7 +373,6 @@ def _process_packet_internal(packet):
         }
     elif packet.haslayer(IPv6):
         ip6 = packet[IPv6]
-        ip_layer = ip6
         result["network"] = {
             "version": 6,
             "src_ip": ip6.src,
@@ -554,7 +551,7 @@ def main():
     except PermissionError as e:
         print(f"Permission error: {e}", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
+    except Exception:
         traceback.print_exc(file=error_log_file)
         error_log_file.flush()
         sys.exit(1)

@@ -1,0 +1,324 @@
+{
+  "results": [
+    {
+      "code": "94             (r\"kworker\", 1.0),\n95             (r\"/tmp/\\.cache\", 1.0),\n96             (r\"bpf.{0,15}(cmd=5|prog_load)\", 1.0),\n",
+      "col_offset": 13,
+      "end_col_offset": 28,
+      "filename": "./eval_llm.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 95,
+      "line_range": [
+        95
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    },
+    {
+      "code": "300             )\n301             with urllib.request.urlopen(req, timeout=300) as resp:\n302                 data = json.loads(resp.read().decode(\"utf-8\"))\n",
+      "col_offset": 17,
+      "end_col_offset": 57,
+      "filename": "./eval_llm.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 301,
+      "line_range": [
+        301
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "96             (r\"kworker\", 1.0),\n97             (r\"/tmp/\\.cache\", 1.0),\n98             (r\"bpf.{0,15}(cmd=5|prog_load)\", 1.0),\n",
+      "col_offset": 13,
+      "end_col_offset": 28,
+      "filename": "./eval_regex.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 97,
+      "line_range": [
+        97
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    },
+    {
+      "code": "26 \n27         with urllib.request.urlopen(req) as response:\n28             result = json.loads(response.read().decode('utf-8'))\n",
+      "col_offset": 13,
+      "end_col_offset": 40,
+      "filename": "./llama.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 27,
+      "line_range": [
+        27
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "9 def clear_screen():\n10     os.system('clear' if os.name == 'posix' else 'cls')\n11 \n",
+      "col_offset": 4,
+      "end_col_offset": 55,
+      "filename": "./log_watcher_injector.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 78,
+        "link": "https://cwe.mitre.org/data/definitions/78.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "Starting a process with a shell, possible injection detected, security issue.",
+      "line_number": 10,
+      "line_range": [
+        10
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b605_start_process_with_a_shell.html",
+      "test_id": "B605",
+      "test_name": "start_process_with_a_shell"
+    },
+    {
+      "code": "21             return json.load(f)\n22     with urllib.request.urlopen(source, timeout=120) as resp:\n23         return json.loads(resp.read().decode(\"utf-8\"))\n",
+      "col_offset": 9,
+      "end_col_offset": 52,
+      "filename": "./scripts/build_attack_index.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 22,
+      "line_range": [
+        22
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "181     }\n182     fp_hash = hashlib.md5(json.dumps(fp, sort_keys=True).encode()).hexdigest()[:10]\n183     return fp_hash, fp\n",
+      "col_offset": 14,
+      "end_col_offset": 66,
+      "filename": "./scripts/lidds_fingerprint.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 327,
+        "link": "https://cwe.mitre.org/data/definitions/327.html"
+      },
+      "issue_severity": "HIGH",
+      "issue_text": "Use of weak MD5 hash for security. Consider usedforsecurity=False",
+      "line_number": 182,
+      "line_range": [
+        182
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b324_hashlib.html",
+      "test_id": "B324",
+      "test_name": "hashlib"
+    },
+    {
+      "code": "79         )\n80         with urllib.request.urlopen(req, timeout=15) as resp:\n81             payload = json.loads(resp.read().decode(\"utf-8\"))\n",
+      "col_offset": 13,
+      "end_col_offset": 52,
+      "filename": "./search_enrichment.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 80,
+      "line_range": [
+        80
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "112         try:\n113             with urllib.request.urlopen(req, timeout=15) as resp:\n114                 payload = json.loads(resp.read().decode(\"utf-8\"))\n",
+      "col_offset": 17,
+      "end_col_offset": 56,
+      "filename": "./search_enrichment.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 113,
+      "line_range": [
+        113
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "738         full = []\n739         with urllib.request.urlopen(req) as resp:\n740             for raw in resp:\n",
+      "col_offset": 13,
+      "end_col_offset": 40,
+      "filename": "./virtual_machine/pipeline_web.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 739,
+      "line_range": [
+        739
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "769         full = []\n770         with urllib.request.urlopen(req) as resp:\n771             for raw in resp:\n",
+      "col_offset": 13,
+      "end_col_offset": 40,
+      "filename": "./virtual_machine/pipeline_web.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 770,
+      "line_range": [
+        770
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "821         output_tokens = None\n822         with urllib.request.urlopen(req) as resp:\n823             for raw in resp:\n",
+      "col_offset": 13,
+      "end_col_offset": 40,
+      "filename": "./virtual_machine/pipeline_web.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 822,
+      "line_range": [
+        822
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "927         req = urllib.request.Request(f\"{OLLAMA_URL}/api/tags\")\n928         with urllib.request.urlopen(req, timeout=3) as resp:\n929             data = json.loads(resp.read().decode(\"utf-8\"))\n",
+      "col_offset": 13,
+      "end_col_offset": 51,
+      "filename": "./virtual_machine/pipeline_web.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 928,
+      "line_range": [
+        928
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "14 \n15 error_log_file = open(\"/tmp/supervisor_error.log\", \"w\")\n16 sys.stderr = error_log_file\n",
+      "col_offset": 22,
+      "end_col_offset": 49,
+      "filename": "./virtual_machine/supervisor/supervisor.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 377,
+        "link": "https://cwe.mitre.org/data/definitions/377.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Probable insecure usage of temp file/directory.",
+      "line_number": 15,
+      "line_range": [
+        15
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b108_hardcoded_tmp_directory.html",
+      "test_id": "B108",
+      "test_name": "hardcoded_tmp_directory"
+    },
+    {
+      "code": "91 \n92         wildcard_key = (proto_num, \"0.0.0.0\", local_port)\n93         if wildcard_key in self._cache:\n",
+      "col_offset": 35,
+      "end_col_offset": 44,
+      "filename": "./virtual_machine/supervisor/supervisor.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 605,
+        "link": "https://cwe.mitre.org/data/definitions/605.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible binding to all interfaces.",
+      "line_number": 92,
+      "line_range": [
+        92
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html",
+      "test_id": "B104",
+      "test_name": "hardcoded_bind_all_interfaces"
+    },
+    {
+      "code": "523     try:\n524         urllib.request.urlopen(\"http://example.com\", timeout=3)\n525     except Exception:\n",
+      "col_offset": 8,
+      "end_col_offset": 63,
+      "filename": "./virtual_machine/supervisor/supervisor.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 524,
+      "line_range": [
+        524
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    }
+  ]
+}

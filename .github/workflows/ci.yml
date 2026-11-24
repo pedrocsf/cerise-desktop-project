@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop, demo]
+  push:
+    branches: [main, develop, demo]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  RUFF_VERSION: "0.17.6"
+  BANDIT_VERSION: "1.9.4"
+
+jobs:
+  python-lint:
+    name: Python lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install ruff
+        run: python -m pip install "ruff==${RUFF_VERSION}"
+      - name: Ruff (syntax and pyflakes)
+        run: ruff check --isolated --select E9,F --output-format github .
+      - name: Byte-compile every module
+        run: python -m compileall -q .
+
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Unit tests
+        run: |
+          if ! ls tests/test_*.py >/dev/null 2>&1; then
+            echo "No Python tests on this branch"
+            exit 0
+          fi
+          python -m unittest discover -s tests -v
+
+  c-build:
+    name: C build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev
+      - name: Compile every C source
+        run: |
+          echo "::add-matcher::.github/matchers/gcc.json"
+          bash .github/scripts/build_c.sh build
+      - name: Frame authentication test
+        if: hashFiles('tests/frame_auth_test.c') != ''
+        run: ./build/frame_auth_test
+
+  bandit:
+    name: Python security (bandit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install bandit
+        run: python -m pip install "bandit==${BANDIT_VERSION}"
+      - name: Bandit (medium severity and confidence, new findings only)
+        run: |
+          baseline_args=()
+          if [ -f .github/bandit-baseline.json ]; then
+            baseline_args=(-b .github/bandit-baseline.json)
+          fi
+          bandit -r . -x ./tests -ll -ii "${baseline_args[@]}"
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"

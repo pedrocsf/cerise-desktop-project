@@ -450,13 +450,6 @@ def build_process_tree_block(events):
         blocks.append("\n".join(block))
     return "\n\n".join(blocks)
 
-    blocks = []
-    for c in candidates:
-        header = (f"{_origin_label(c)} category={c['category']} confidence={c['confidence']} "
-                  f"rerank_score={c['score']:.2f} dense_sim={c['dense_similarity']:.2f}")
-        blocks.append(f"{header}\n{c['context']}")
-    return "\n\n---\n\n".join(blocks)
-
 
 if __name__ == "__main__":
     print("log_watcher.py is a library and no longer runs standalone.")

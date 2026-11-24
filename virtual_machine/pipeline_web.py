@@ -27,7 +27,6 @@ from log_watcher import RagRetriever, build_prompt_template, format_rag_block, b
 from batch_digest import BaselineProfile, build_digest
 from attack_mapping import map_attack
 from search_enrichment import (
-    NO_SEARCH_TEXT,
     enrich_automatic,
     enrich_manual,
     format_search_block,
@@ -890,7 +889,7 @@ def send_to_llm(prompt, on_token, on_done):
                            "https://api.openai.com/v1/chat/completions", on_token, on_done)
     elif provider == "gemini":
         _llm_openai_compat(prompt, model, api_key,
-                           f"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                           "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                            on_token, on_done)
     elif provider == "claude":
         _llm_claude(prompt, model, api_key, cfg.get("effort", ""), on_token, on_done)

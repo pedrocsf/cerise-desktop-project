@@ -183,6 +183,21 @@ kprobe:ksys_chroot
            str(arg0));
 }
 
+kprobe:group_send_sig_info,
+kprobe:do_send_sig_info
+{
+    $sig = (int32)arg0;
+    $target = (struct task_struct *)arg2;
+    if ($sig == 9 || $sig == 15 || $sig == 19) {
+        if (strncmp($target->comm, "bpftrace", 8) == 0 ||
+            strncmp($target->comm, "guest_monitor", 13) == 0 ||
+            strncmp($target->comm, "supervisor_monit", 16) == 0) {
+            printf("{\"e\":\"sensor_tamper\",\"c\":\"%s\",\"p\":%d,\"u\":%d,\"s\":%d,\"t\":\"%s\",\"tp\":%d}\n",
+                   comm, pid, uid, $sig, $target->comm, $target->tgid);
+        }
+    }
+}
+
 END
 {
     printf("\nMonitoring ended.\n");

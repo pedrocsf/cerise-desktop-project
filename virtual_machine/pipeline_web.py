@@ -175,7 +175,9 @@ class PipelineState:
         self.monitor_pids = set()
         self.heartbeat_sensors = set()
         self.incident = {"records": [], "active": False}
-        self.vm_config = {"ram_mb": 8192, "cpus": 6, "detonation": True, "restore_snapshot": ""}
+        self.vm_config = {"ram_mb": 8192, "cpus": 6, "detonation": True,
+                          "restore_snapshot": "", "module_lockdown": False}
+        self.vm_module_lockdown_active = False
         self.attack_config = {"enabled": False}
         self.search_config = {
             "mode": "disabled",
@@ -232,6 +234,10 @@ class PipelineState:
                 "vm_last_error": self.vm_last_error,
                 "vm_paused": self.vm_paused,
                 "vm_detonation": self.vm_config["detonation"],
+                "vm_module_lockdown": {
+                    "configured": self.vm_config["module_lockdown"],
+                    "active": self.vm_module_lockdown_active,
+                },
                 "vm_last_restore": self.vm_last_restore,
                 "demo_mode": DEMO_MODE,
                 "ttyd_enabled": TTYD_ENABLED,
@@ -392,6 +398,11 @@ def run_vm_controller(action):
         env["CERISE_RAM_MB"] = str(state.vm_config["ram_mb"])
         env["CERISE_CPUS"] = str(state.vm_config["cpus"])
         detonation = state.vm_config["detonation"]
+        module_lockdown = state.vm_config["module_lockdown"]
+    if module_lockdown:
+        env["CERISE_MODULE_LOCKDOWN"] = "1"
+    else:
+        env.pop("CERISE_MODULE_LOCKDOWN", None)
     if detonation:
         env["CERISE_DETONATION"] = "1"
     else:
@@ -580,6 +591,7 @@ def vm_start_worker():
         state.vm_paused = False
         state.vm_last_error = ""
         restore_tag = state.vm_config["restore_snapshot"]
+        module_lockdown_used = state.vm_config["module_lockdown"]
         clear_run_memory_locked()
     broadcast_sse("vm_status", {"vm_running": False, "vm_busy": True})
 
@@ -603,6 +615,7 @@ def vm_start_worker():
             start_listeners(entries)
             with state.lock:
                 state.vm_running = True
+                state.vm_module_lockdown_active = module_lockdown_used
         else:
             ok = False
             output = "VM started but no serial ports were detected"
@@ -627,6 +640,7 @@ def vm_stop_worker():
 
     with state.lock:
         state.vm_running = False
+        state.vm_module_lockdown_active = False
         state.vm_busy = False
         state.vm_paused = False
         state.vm_metrics["timestamps"].clear()
@@ -1673,6 +1687,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             with state.lock:
                 detonation = bool(data.get("detonation", state.vm_config["detonation"]))
                 restore_snapshot = str(data.get("restore_snapshot", state.vm_config["restore_snapshot"]))
+                module_lockdown = data.get("module_lockdown", state.vm_config["module_lockdown"])
+            if not isinstance(module_lockdown, bool):
+                self.send_json({"error": "module_lockdown must be a boolean"}, 400)
+                return
             if restore_snapshot:
                 exists, error = snapshot_exists(restore_snapshot)
                 if exists is None:
@@ -1686,8 +1704,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 state.vm_config["cpus"] = cpus
                 state.vm_config["detonation"] = detonation
                 state.vm_config["restore_snapshot"] = restore_snapshot
+                state.vm_config["module_lockdown"] = module_lockdown
             self.send_json({"status": "ok", "ram_mb": ram_mb, "cpus": cpus,
-                            "detonation": detonation, "restore_snapshot": restore_snapshot})
+                            "detonation": detonation, "restore_snapshot": restore_snapshot,
+                            "module_lockdown": module_lockdown})
         elif self.path == "/api/vm/disk-grow":
             try:
                 add_gb = int(self._read_json_body().get("add_gb"))

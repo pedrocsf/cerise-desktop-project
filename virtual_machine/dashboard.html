@@ -813,6 +813,14 @@
                 Detonation mode (discard disk writes)
               </label>
               <div>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer">
+                  <input id="vm-cfg-lockdown" type="checkbox" style="accent-color:var(--accent)">
+                  Module lockdown
+                </label>
+                <div style="font-size:11px;color:var(--muted);margin-top:4px;max-width:420px">Blocks kernel module loading inside the guest after boot (kernel.modules_disabled). Applies on the next Start and cannot be undone without rebooting the VM. Samples that rely on loading modules (rootkits) may behave differently.</div>
+                <div id="vm-lockdown-state" style="font-size:11px;color:var(--muted);margin-top:4px">Off</div>
+              </div>
+              <div>
                 <label for="vm-cfg-restore" style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Restore before each start</label>
                 <select id="vm-cfg-restore" style="background:var(--surface-sec);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:10px;font-size:12px;outline:none;max-width:100%">
                   <option value="">(none)</option>
@@ -997,6 +1005,7 @@
         document.getElementById('vm-cfg-cpus').value = cfg.cpus;
         document.getElementById('vm-cfg-disk-size').textContent = cfg.disk_size_gb ?? '–';
         document.getElementById('vm-cfg-detonation').checked = !!cfg.detonation;
+        document.getElementById('vm-cfg-lockdown').checked = !!cfg.module_lockdown;
         vmRestoreSelection = cfg.restore_snapshot || '';
         renderVmRestoreSelect();
         renderVmSnapshots();
@@ -1010,7 +1019,7 @@
       const ram_mb = parseInt(document.getElementById('vm-cfg-ram').value, 10);
       const cpus = parseInt(document.getElementById('vm-cfg-cpus').value, 10);
       statusEl.style.color = 'var(--muted)'; statusEl.textContent = 'Saving...';
-      fetch('/api/vm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ram_mb, cpus, detonation: document.getElementById('vm-cfg-detonation').checked, restore_snapshot: document.getElementById('vm-cfg-restore').value }) })
+      fetch('/api/vm/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ram_mb, cpus, detonation: document.getElementById('vm-cfg-detonation').checked, module_lockdown: document.getElementById('vm-cfg-lockdown').checked, restore_snapshot: document.getElementById('vm-cfg-restore').value }) })
         .then(r => r.json()).then(d => {
           if (d.error) { statusEl.style.color = 'var(--red)'; statusEl.textContent = d.error }
           else { statusEl.style.color = 'var(--green)'; statusEl.textContent = 'Saved. Takes effect on the next Start VM.'; vmRestoreSelection = document.getElementById('vm-cfg-restore').value; renderVmSnapshots() }
@@ -1308,6 +1317,8 @@ MiB Swap:   2048.0 total,      0.0 free,   2048.0 used,    112.4 avail Mem
       ebpfCount = s.ebpf_count || 0; networkCount = s.network_count || 0;
       drawTimeline(); drawSources();
       document.getElementById('vm-metrics-grid').style.display = s.demo_mode ? 'none' : '';
+      const lockdown = s.vm_module_lockdown || {};
+      document.getElementById('vm-lockdown-state').textContent = lockdown.active ? 'Active in the running VM' : (lockdown.configured ? 'Enabled for the next Start' : 'Off');
       document.getElementById('vm-start-btn').disabled = s.vm_running || s.vm_busy;
       document.getElementById('vm-stop-btn').disabled = !s.vm_running || s.vm_busy;
       document.getElementById('vm-lifecycle-status').textContent = s.vm_busy ? 'working...' : (s.vm_running ? (s.vm_paused ? 'paused' : 'running') : 'stopped');
